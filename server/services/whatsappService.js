@@ -263,28 +263,14 @@ const sendWhatsAppMessage = async (phone, message, template) => {
     const formattedPhone = formatPhoneNumber(phone);
     console.log(`Attempting to send WhatsApp message to ${formattedPhone} (original: ${phone})`);
 
-    // Prepare the request payload for template message
+    // For testing, send a simple text message instead of template
     const payload = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to: formattedPhone,
-      type: 'template',
-      template: {
-        name: template?.whatsappTemplateName || 'hello_world',
-        language: {
-          code: template?.language?.toLowerCase() || 'en'
-        },
-        components: [
-          {
-            type: 'body',
-            parameters: [
-              {
-                type: 'text',
-                text: message
-              }
-            ]
-          }
-        ]
+      type: 'text',
+      text: {
+        body: message
       }
     };
 
