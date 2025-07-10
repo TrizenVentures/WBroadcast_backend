@@ -40,6 +40,10 @@ const templateSchema = new mongoose.Schema({
     type: String,
     unique: true,
     sparse: true
+  },
+  whatsappTemplateName: {
+    type: String,
+    required: true // Make this required
   }
 }, {
   timestamps: true

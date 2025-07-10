@@ -2,7 +2,6 @@ import Bull from 'bull';
 import Redis from 'redis';
 import Campaign from '../models/Campaign.js';
 import { sendCampaignMessages } from './whatsappService.js';
-import { sendCampaignMessagesTwilio } from './twilioService.js';
 
 let campaignQueue;
 let redisClient;
@@ -32,7 +31,7 @@ export const initializeScheduler = async (io) => {
     campaignQueue.process('send-campaign', async (job) => {
       const { campaignId } = job.data;
       console.log(`Processing campaign: ${campaignId}`);
-      
+
       try {
         const campaign = await Campaign.findById(campaignId);
         if (!campaign) {
@@ -55,32 +54,26 @@ export const initializeScheduler = async (io) => {
           progress: campaign.progress
         });
 
-        // Determine which service to use
-        const provider = determineProvider(campaign);
-        
-        if (provider === 'twilio') {
-          await sendCampaignMessagesTwilio(campaign, io);
-        } else {
-          await sendCampaignMessages(campaign, io);
-        }
+        // Send campaign messages using WhatsApp Cloud API
+        await sendCampaignMessages(campaign, io);
 
-        console.log(`Campaign ${campaignId} completed successfully using ${provider}`);
+        console.log(`Campaign ${campaignId} completed successfully using WhatsApp Cloud API`);
       } catch (error) {
         console.error(`Error processing campaign ${campaignId}:`, error);
-        
+
         // Update campaign status to failed
         const campaign = await Campaign.findById(campaignId);
         if (campaign) {
           campaign.status = 'failed';
           await campaign.save();
-          
+
           io.emit('campaign-status-update', {
             campaignId: campaign._id,
             status: 'failed',
             error: error.message
           });
         }
-        
+
         throw error;
       }
     });
@@ -95,28 +88,20 @@ export const initializeScheduler = async (io) => {
 };
 
 const determineProvider = (campaign) => {
-  // If explicitly set, use that provider
-  if (campaign.provider && campaign.provider !== 'auto') {
-    return campaign.provider;
-  }
-  
-  // Auto-determine based on environment
+  // Check for WhatsApp Cloud API credentials
   const hasWhatsAppCredentials = process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const hasTwilioCredentials = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN;
-  
-  if (hasWhatsAppCredentials) {
-    return 'whatsapp';
-  } else if (hasTwilioCredentials) {
-    return 'twilio';
-  } else {
-    throw new Error('No messaging provider credentials configured');
+
+  if (!hasWhatsAppCredentials) {
+    throw new Error('WhatsApp Cloud API credentials not configured. Please set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID environment variables.');
   }
+
+  return 'whatsapp';
 };
 
 export const scheduleCampaign = async (campaign) => {
   try {
     const delay = new Date(campaign.scheduledAt).getTime() - Date.now();
-    
+
     if (delay <= 0) {
       // Schedule immediately if time has passed
       const job = await campaignQueue.add('send-campaign', {
@@ -128,7 +113,7 @@ export const scheduleCampaign = async (campaign) => {
           delay: 2000
         }
       });
-      
+
       campaign.jobId = job.id.toString();
     } else {
       // Schedule for future
@@ -142,13 +127,13 @@ export const scheduleCampaign = async (campaign) => {
           delay: 2000
         }
       });
-      
+
       campaign.jobId = job.id.toString();
     }
-    
+
     await campaign.save();
     console.log(`Campaign ${campaign._id} scheduled with job ID: ${campaign.jobId}`);
-    
+
     return campaign.jobId;
   } catch (error) {
     console.error('Error scheduling campaign:', error);
@@ -197,10 +182,10 @@ export const rescheduleCampaign = async (campaignId, newScheduledAt) => {
     // Update scheduled time
     campaign.scheduledAt = newScheduledAt;
     campaign.status = 'scheduled';
-    
+
     // Schedule new job
     await scheduleCampaign(campaign);
-    
+
     console.log(`Campaign ${campaignId} rescheduled for ${newScheduledAt}`);
     return campaign;
   } catch (error) {

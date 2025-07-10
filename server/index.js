@@ -14,37 +14,61 @@ import n8nRoutes from './routes/n8n.js';
 import { initializeScheduler } from './services/scheduler.js';
 import { setupSocketHandlers } from './services/socketService.js';
 
-
-// // Debug environment variables loading
-// console.log('Environment variables loaded:');
-// console.log('GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? 'SET' : 'UNDEFINED');
-// console.log('GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? 'SET' : 'UNDEFINED');
-// console.log('NODE_ENV:', process.env.NODE_ENV);
-// console.log('process.cwd():', process.cwd());
-// console.log('dotenv loaded:', process.env.TWILIO_ACCOUNT_SID);
-
 // Initialize OAuth strategies after environment variables are loaded
 await initializeOAuthStrategies();
 
 const app = express();
 const server = createServer(app);
+
+// Define allowed origins
+const allowedOrigins = [
+  'https://wbc.trizenventures.com',
+  'http://localhost:8080',
+  'http://localhost:3000',
+  'http://localhost:5173'  // Vite's default port
+];
+
+// Configure Socket.IO with CORS
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || "https://wbc.trizenventures.com/",
-    methods: ["GET", "POST"]
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
-// Middleware
+// Configure Express CORS
 app.use(cors({
-  origin: 'https://wbc.trizenventures.com',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true,
-  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization']
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
-// Optional: Handle OPTIONS requests globally (if needed)
-app.options('*', cors());
+// Handle preflight requests
+app.options('*', cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      return callback(new Error('Not allowed by CORS'), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization']
+}));
 
 app.use(express.json());
 
