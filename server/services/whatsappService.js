@@ -48,18 +48,17 @@ export const sendCampaignMessages = async (campaign, io) => {
           contactId: contact._id,
           templateId: template._id,
           content: messageContent,
-          status: 'pending',
-          provider: 'meta'
+          status: 'pending'
         });
 
         await message.save();
 
-        // Send WhatsApp message
-        const whatsappResponse = await sendWhatsAppMessage(contact.phone, messageContent, template);
+        // Send WhatsApp message as simple text
+        const whatsappResponse = await sendWhatsAppTextMessage(contact.phone, messageContent);
 
         if (whatsappResponse.success) {
           message.status = 'sent';
-          message.providerMessageId = whatsappResponse.messageId;
+          message.whatsappMessageId = whatsappResponse.messageId;
           message.sentAt = new Date();
           campaign.progress.sent++;
         } else {
@@ -192,7 +191,7 @@ const updateMessageStatus = async (statusUpdate) => {
     console.log('Updating message status:', JSON.stringify(statusUpdate, null, 2));
     const { id: whatsappMessageId, status, timestamp, errors } = statusUpdate;
 
-    const message = await Message.findOne({ providerMessageId: whatsappMessageId });
+    const message = await Message.findOne({ whatsappMessageId: whatsappMessageId });
     if (!message) {
       console.log(`Message not found for WhatsApp ID: ${whatsappMessageId}`);
       return;
@@ -244,12 +243,13 @@ const updateMessageStatus = async (statusUpdate) => {
     throw error;
   }
 };
+
 // Function to format phone number for WhatsApp API
 const formatPhoneNumber = (phone) => {
   // Remove any non-digit characters
   let cleaned = phone.replace(/\D/g, '');
 
-  // If number doesn't start with '+', add it
+  // If number doesn't start with country code, add India's code
   if (!cleaned.startsWith('91')) {
     cleaned = '91' + cleaned;
   }
@@ -257,13 +257,13 @@ const formatPhoneNumber = (phone) => {
   return cleaned;
 };
 
-// Function to send WhatsApp message using Meta's Cloud API
-const sendWhatsAppMessage = async (phone, message, template) => {
+// Function to send simple text message via WhatsApp Cloud API
+const sendWhatsAppTextMessage = async (phone, message) => {
   try {
     const formattedPhone = formatPhoneNumber(phone);
-    console.log(`Attempting to send WhatsApp message to ${formattedPhone} (original: ${phone})`);
+    console.log(`Sending simple text message to ${formattedPhone} (original: ${phone})`);
 
-    // For testing, send a simple text message instead of template
+    // Simple text message payload
     const payload = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
@@ -274,7 +274,7 @@ const sendWhatsAppMessage = async (phone, message, template) => {
       }
     };
 
-    console.log('Request payload:', JSON.stringify(payload, null, 2));
+    console.log('Text message payload:', JSON.stringify(payload, null, 2));
 
     const response = await axios.post(
       `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
@@ -298,17 +298,20 @@ const sendWhatsAppMessage = async (phone, message, template) => {
       messageId: response.data.messages[0].id
     };
   } catch (error) {
-    console.error('Error sending WhatsApp message:');
+    console.error('Error sending WhatsApp text message:');
     console.error('Error details:', {
       status: error.response?.status,
       statusText: error.response?.statusText,
       data: error.response?.data,
       message: error.message
     });
+
+    // Log environment details for debugging
     console.error('Environment check:', {
       apiUrl: WHATSAPP_API_URL,
       phoneNumberId: PHONE_NUMBER_ID,
-      hasAccessToken: !!ACCESS_TOKEN
+      hasAccessToken: !!ACCESS_TOKEN,
+      accessTokenLength: ACCESS_TOKEN?.length
     });
 
     return {
