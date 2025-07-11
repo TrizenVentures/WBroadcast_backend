@@ -53,8 +53,21 @@ export const sendCampaignMessages = async (campaign, io) => {
 
         await message.save();
 
-        // Send WhatsApp message as simple text
-        const whatsappResponse = await sendWhatsAppTextMessage(contact.phone, messageContent);
+        // Determine message type and send accordingly
+        let whatsappResponse;
+        
+        if (template.whatsappTemplateName && template.whatsappTemplateName.trim() !== '') {
+          // Send as WhatsApp template
+          whatsappResponse = await sendWhatsAppTemplateMessage(
+            contact.phone, 
+            template, 
+            campaign.variables, 
+            contact
+          );
+        } else {
+          // Send as simple text message
+          whatsappResponse = await sendWhatsAppTextMessage(contact.phone, messageContent);
+        }
 
         if (whatsappResponse.success) {
           message.status = 'sent';
@@ -319,4 +332,126 @@ const sendWhatsAppTextMessage = async (phone, message) => {
       error: error.response?.data?.error?.message || error.message
     };
   }
+};
+
+// Function to send WhatsApp template message
+const sendWhatsAppTemplateMessage = async (phone, template, campaignVariables, contact) => {
+  try {
+    const formattedPhone = formatPhoneNumber(phone);
+    console.log(`Sending WhatsApp template "${template.whatsappTemplateName}" to ${formattedPhone} (original: ${phone})`);
+
+    // Build template payload
+    const templatePayload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: formattedPhone,
+      type: 'template',
+      template: {
+        name: template.whatsappTemplateName,
+        language: {
+          code: template.whatsappConfig?.language || 'en'
+        }
+      }
+    };
+
+    // Add components if template has dynamic content or buttons
+    const components = [];
+
+    // Handle body parameters (if template has variables in body)
+    const bodyVariables = extractTemplateVariables(template.body);
+    if (bodyVariables.length > 0) {
+      const bodyParameters = bodyVariables.map(variable => {
+        let value = '';
+        
+        // Try to get value from campaign variables first
+        if (campaignVariables && campaignVariables.has(variable)) {
+          value = campaignVariables.get(variable);
+        }
+        // Then try contact-specific variables
+        else if (variable === 'name') {
+          value = contact.name;
+        } else if (variable === 'phone') {
+          value = contact.phone;
+        } else if (variable === 'email') {
+          value = contact.email || '';
+        } else if (contact.metadata && contact.metadata.has(variable)) {
+          value = contact.metadata.get(variable);
+        }
+        
+        return {
+          type: 'text',
+          text: value
+        };
+      });
+
+      components.push({
+        type: 'body',
+        parameters: bodyParameters
+      });
+    }
+
+    // Handle buttons (for templates with quick reply buttons)
+    if (template.whatsappConfig?.hasButtons && template.whatsappConfig.buttons?.length > 0) {
+      // For quick reply buttons, we don't need to send parameters
+      // The buttons are already defined in the template
+      console.log(`Template has ${template.whatsappConfig.buttons.length} buttons configured`);
+    }
+
+    // Add components to template if any exist
+    if (components.length > 0) {
+      templatePayload.template.components = components;
+    }
+
+    console.log('WhatsApp template payload:', JSON.stringify(templatePayload, null, 2));
+
+    const response = await axios.post(
+      `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
+      templatePayload,
+      {
+        headers: {
+          'Authorization': `Bearer ${ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log('WhatsApp Template API Response:', JSON.stringify(response.data, null, 2));
+
+    if (!response.data.messages || !response.data.messages[0]) {
+      throw new Error('Invalid response format from WhatsApp API');
+    }
+
+    return {
+      success: true,
+      messageId: response.data.messages[0].id
+    };
+  } catch (error) {
+    console.error('Error sending WhatsApp template message:');
+    console.error('Error details:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      message: error.message
+    });
+
+    return {
+      success: false,
+      error: error.response?.data?.error?.message || error.message
+    };
+  }
+};
+
+// Helper function to extract variables from template body
+const extractTemplateVariables = (templateBody) => {
+  const variableRegex = /{{(\w+)}}/g;
+  const variables = [];
+  let match;
+  
+  while ((match = variableRegex.exec(templateBody)) !== null) {
+    if (!variables.includes(match[1])) {
+      variables.push(match[1]);
+    }
+  }
+  
+  return variables;
 };
