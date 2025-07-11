@@ -441,6 +441,158 @@ const sendWhatsAppTemplateMessage = async (phone, template, campaignVariables, c
   }
 };
 
+// Function to fetch live templates from Meta WhatsApp Business API
+export const fetchLiveWhatsAppTemplates = async () => {
+  try {
+    const BUSINESS_ACCOUNT_ID = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+    
+    if (!BUSINESS_ACCOUNT_ID) {
+      throw new Error('WHATSAPP_BUSINESS_ACCOUNT_ID environment variable is required');
+    }
+
+    console.log('Fetching live WhatsApp templates from Meta API...');
+
+    const response = await axios.get(
+      `${WHATSAPP_API_URL}/${BUSINESS_ACCOUNT_ID}/message_templates`,
+      {
+        headers: {
+          'Authorization': `Bearer ${ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        params: {
+          fields: 'name,status,category,language,components,id',
+          limit: 100 // Adjust as needed
+        }
+      }
+    );
+
+    console.log('Meta API Response:', JSON.stringify(response.data, null, 2));
+
+    if (!response.data.data) {
+      throw new Error('Invalid response format from Meta API');
+    }
+
+    // Transform Meta API response to our frontend format
+    const templates = response.data.data
+      .filter(template => template.status === 'APPROVED') // Only show approved templates
+      .map(template => ({
+        id: template.id,
+        name: template.name,
+        status: template.status.toLowerCase(),
+        category: template.category,
+        language: template.language,
+        whatsappTemplateName: template.name,
+        components: template.components || [],
+        // Extract body text from components
+        body: extractBodyFromComponents(template.components),
+        // Extract variables from components
+        variables: extractVariablesFromComponents(template.components),
+        // Check if template has buttons
+        whatsappConfig: {
+          language: template.language,
+          hasButtons: hasButtonComponents(template.components),
+          buttons: extractButtonsFromComponents(template.components),
+          headerType: getHeaderType(template.components)
+        },
+        provider: 'whatsapp',
+        isLiveTemplate: true // Flag to indicate this is from Meta API
+      }));
+
+    console.log(`Successfully fetched ${templates.length} approved templates from Meta API`);
+    return {
+      success: true,
+      templates,
+      total: templates.length
+    };
+
+  } catch (error) {
+    console.error('Error fetching live WhatsApp templates:');
+    console.error('Error details:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      message: error.message
+    });
+
+    return {
+      success: false,
+      error: error.response?.data?.error?.message || error.message,
+      templates: []
+    };
+  }
+};
+
+// Helper function to extract body text from template components
+const extractBodyFromComponents = (components) => {
+  if (!components || !Array.isArray(components)) return '';
+  
+  const bodyComponent = components.find(comp => comp.type === 'BODY');
+  return bodyComponent?.text || '';
+};
+
+// Helper function to extract variables from template components
+const extractVariablesFromComponents = (components) => {
+  if (!components || !Array.isArray(components)) return [];
+  
+  const variables = [];
+  
+  components.forEach(component => {
+    if (component.text) {
+      // Extract {{1}}, {{2}}, etc. from the text
+      const matches = component.text.match(/\{\{(\d+)\}\}/g);
+      if (matches) {
+        matches.forEach(match => {
+          const variableNumber = match.replace(/[{}]/g, '');
+          if (!variables.find(v => v.name === `param${variableNumber}`)) {
+            variables.push({
+              name: `param${variableNumber}`,
+              type: 'text',
+              required: true
+            });
+          }
+        });
+      }
+    }
+  });
+  
+  return variables;
+};
+
+// Helper function to check if template has button components
+const hasButtonComponents = (components) => {
+  if (!components || !Array.isArray(components)) return false;
+  return components.some(comp => comp.type === 'BUTTONS');
+};
+
+// Helper function to extract buttons from components
+const extractButtonsFromComponents = (components) => {
+  if (!components || !Array.isArray(components)) return [];
+  
+  const buttonComponent = components.find(comp => comp.type === 'BUTTONS');
+  if (!buttonComponent || !buttonComponent.buttons) return [];
+  
+  return buttonComponent.buttons.map(button => ({
+    type: button.type === 'QUICK_REPLY' ? 'quick_reply' : 'call_to_action',
+    text: button.text,
+    payload: button.type === 'QUICK_REPLY' ? button.text : undefined
+  }));
+};
+
+// Helper function to get header type
+const getHeaderType = (components) => {
+  if (!components || !Array.isArray(components)) return 'none';
+  
+  const headerComponent = components.find(comp => comp.type === 'HEADER');
+  if (!headerComponent) return 'none';
+  
+  if (headerComponent.format === 'TEXT') return 'text';
+  if (headerComponent.format === 'IMAGE') return 'image';
+  if (headerComponent.format === 'VIDEO') return 'video';
+  if (headerComponent.format === 'DOCUMENT') return 'document';
+  
+  return 'none';
+};
+
 // Helper function to extract variables from template body
 const extractTemplateVariables = (templateBody) => {
   const variableRegex = /{{(\w+)}}/g;

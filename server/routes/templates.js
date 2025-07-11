@@ -1,7 +1,40 @@
 import express from 'express';
 import Template from '../models/Template.js';
+import { fetchLiveWhatsAppTemplates } from '../services/whatsappService.js';
 
 const router = express.Router();
+
+// Get live WhatsApp templates from Meta API
+router.get('/whatsapp/live', async (req, res) => {
+  try {
+    console.log('Fetching live WhatsApp templates...');
+    const result = await fetchLiveWhatsAppTemplates();
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        templates: result.templates,
+        total: result.total,
+        message: 'Live templates fetched successfully from Meta API'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error,
+        templates: [],
+        message: 'Failed to fetch live templates from Meta API'
+      });
+    }
+  } catch (error) {
+    console.error('Error in live templates endpoint:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      templates: [],
+      message: 'Internal server error while fetching live templates'
+    });
+  }
+});
 
 // Get all templates
 router.get('/', async (req, res) => {
