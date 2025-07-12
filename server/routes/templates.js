@@ -127,6 +127,78 @@ router.delete('/:id', async (req, res) => {
 
 export default router;
 
+// Test endpoint to verify WhatsApp API connection
+router.post('/test-whatsapp', async (req, res) => {
+  try {
+    const { phone } = req.body;
+    
+    if (!phone) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+
+    const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+    const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const WHATSAPP_API_URL = 'https://graph.facebook.com/v22.0';
+
+    // Format phone number
+    let cleaned = phone.replace(/\D/g, '');
+    if (!cleaned.startsWith('91') && cleaned.length === 10) {
+      cleaned = '91' + cleaned;
+    }
+
+    // Test with hello_world template (exactly like your working curl)
+    const payload = {
+      messaging_product: 'whatsapp',
+      to: cleaned,
+      type: 'template',
+      template: {
+        name: 'hello_world',
+        language: {
+          code: 'en_US'
+        }
+      }
+    };
+
+    console.log('Testing WhatsApp API with payload:', JSON.stringify(payload, null, 2));
+    console.log('Using URL:', `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`);
+    console.log('Access Token Length:', ACCESS_TOKEN?.length);
+
+    const response = await axios.post(
+      `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
+      payload,
+      {
+        headers: {
+          'Authorization': `Bearer ${ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log('✅ WhatsApp Test Success:', JSON.stringify(response.data, null, 2));
+
+    res.json({
+      success: true,
+      message: 'WhatsApp message sent successfully',
+      data: response.data,
+      payload: payload
+    });
+
+  } catch (error) {
+    console.error('❌ WhatsApp Test Failed:');
+    if (error.response) {
+      console.error('Status:', error.response.status);
+      console.error('Data:', JSON.stringify(error.response.data, null, 2));
+    } else {
+      console.error('Error:', error.message);
+    }
+
+    res.status(500).json({
+      success: false,
+      error: error.response?.data?.error?.message || error.message,
+      details: error.response?.data
+    });
+  }
+});
 // Helper route to create your specific WhatsApp templates
 // You can call this once to set up your templates
 router.post('/setup-whatsapp-templates', async (req, res) => {

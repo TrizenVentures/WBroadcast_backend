@@ -3,16 +3,24 @@ import Contact from '../models/Contact.js';
 import Message from '../models/Message.js';
 import Campaign from '../models/Campaign.js';
 
-const WHATSAPP_API_URL = 'https://graph.facebook.com/v22.0'; // Use v22.0 as in working curl
+const WHATSAPP_API_URL = 'https://graph.facebook.com/v22.0';
 const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
+// Add logging for debugging
+console.log('WhatsApp Service Configuration:');
+console.log('API URL:', WHATSAPP_API_URL);
+console.log('Phone Number ID:', PHONE_NUMBER_ID);
+console.log('Access Token Length:', ACCESS_TOKEN?.length);
+
 export const sendCampaignMessages = async (campaign, io) => {
   try {
-    // Use campaign.templateName, templateLanguage, templateComponents directly
-    const templateName = campaign.templateName;
-    const templateLanguage = campaign.templateLanguage || 'en';
-    const templateComponents = campaign.templateComponents || [];
+    console.log('Starting campaign message sending for campaign:', campaign._id);
+    console.log('Campaign data:', {
+      templateName: campaign.templateName,
+      templateLanguage: campaign.templateLanguage,
+      templateComponents: campaign.templateComponents
+    });
 
     // Get contacts
     const contacts = await Contact.find({
@@ -20,6 +28,8 @@ export const sendCampaignMessages = async (campaign, io) => {
       status: 'active',
       optedOut: false
     });
+
+    console.log(`Found ${contacts.length} active contacts for campaign`);
 
     if (contacts.length === 0) {
       throw new Error('No active contacts found');
@@ -29,109 +39,142 @@ export const sendCampaignMessages = async (campaign, io) => {
     campaign.progress.total = contacts.length;
     await campaign.save();
 
-    // Use only one declaration for rate limiting
     const rateLimitPerMinute = campaign.rateLimitPerMinute || 1000;
     const delayBetweenMessages = (60 * 1000) / rateLimitPerMinute;
 
+    console.log(`Processing ${contacts.length} contacts with ${delayBetweenMessages}ms delay between messages`);
+
     for (let i = 0; i < contacts.length; i++) {
       const contact = contacts[i];
+      console.log(`Processing contact ${i + 1}/${contacts.length}: ${contact.name} (${contact.phone})`);
+      
       try {
-        // Build WhatsApp template payload
         const formattedPhone = formatPhoneNumber(contact.phone);
+        console.log(`Formatted phone: ${contact.phone} -> ${formattedPhone}`);
+        
+        // Build WhatsApp template payload matching your working curl
         const templatePayload = {
           messaging_product: 'whatsapp',
-          recipient_type: 'individual',
           to: formattedPhone,
           type: 'template',
           template: {
-            name: templateName,
-            language: { code: templateLanguage },
-            components: templateComponents // Pass components as-is from campaign
+            name: campaign.templateName,
+            language: { 
+              code: campaign.templateLanguage || 'en_US' 
+            }
           }
         };
 
-        // Send WhatsApp template message
-        try {
-          const response = await axios.post(
-            `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
-            templatePayload,
-            {
-              headers: {
-                'Authorization': `Bearer ${ACCESS_TOKEN}`,
-                'Content-Type': 'application/json'
-              }
-            }
-          );
-          console.log('WhatsApp API Response:', JSON.stringify(response.data, null, 2));
-
-          // Create message record
-          const message = new Message({
-            campaignId: campaign._id,
-            contactId: contact._id,
-            content: JSON.stringify(templatePayload),
-            status: 'sent',
-            whatsappMessageId: response.data.messages?.[0]?.id || null,
-            sentAt: new Date()
-          });
-          await message.save();
-
-          // Update campaign progress
-          campaign.progress.sent++;
-          await campaign.save();
-
-          // Emit status update
-          if (io) {
-            io.to(campaign._id.toString()).emit('campaign-progress', {
-              campaignId: campaign._id,
-              progress: campaign.progress
-            });
-          }
-        } catch (err) {
-          // Log the error response for debugging
-          if (err.response) {
-            console.error('WhatsApp API Error:', JSON.stringify(err.response.data, null, 2));
-          } else {
-            console.error('WhatsApp API Error:', err.message);
-          }
-          // Handle individual message error
-          const message = new Message({
-            campaignId: campaign._id,
-            contactId: contact._id,
-            content: JSON.stringify(templatePayload),
-            status: 'failed',
-            errorMessage: err.message,
-            sentAt: new Date()
-          });
-          await message.save();
-          campaign.progress.failed++;
-          await campaign.save();
+        // Only add components if they exist and are not empty
+        if (campaign.templateComponents && campaign.templateComponents.length > 0) {
+          templatePayload.template.components = campaign.templateComponents;
         }
+
+        console.log('Sending WhatsApp message with payload:', JSON.stringify(templatePayload, null, 2));
+
+        // Send WhatsApp template message
+        const response = await axios.post(
+          `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
+          templatePayload,
+          {
+            headers: {
+              'Authorization': `Bearer ${ACCESS_TOKEN}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        
+        console.log('✅ WhatsApp API Success Response:', JSON.stringify(response.data, null, 2));
+
+        // Create message record
+        const message = new Message({
+          campaignId: campaign._id,
+          contactId: contact._id,
+          content: JSON.stringify(templatePayload),
+          status: 'sent',
+          whatsappMessageId: response.data.messages?.[0]?.id || null,
+          sentAt: new Date()
+        });
+        await message.save();
+
+        // Update campaign progress
+        campaign.progress.sent++;
+        await campaign.save();
+
+        // Emit status update
+        if (io) {
+          io.emit('campaign-progress-update', {
+            campaignId: campaign._id,
+            progress: campaign.progress
+          });
+        }
+        
       } catch (err) {
+        console.error('❌ Error sending message to contact:', contact.phone);
+        if (err.response) {
+          console.error('WhatsApp API Error Response:', JSON.stringify(err.response.data, null, 2));
+          console.error('Status:', err.response.status);
+          console.error('Headers:', err.response.headers);
+        } else {
+          console.error('Error details:', err.message);
+        }
+        
         // Handle individual message error
         const message = new Message({
           campaignId: campaign._id,
           contactId: contact._id,
-          content: '',
+          content: JSON.stringify(templatePayload),
           status: 'failed',
-          errorMessage: err.message,
+          errorMessage: err.response?.data?.error?.message || err.message,
           sentAt: new Date()
         });
         await message.save();
         campaign.progress.failed++;
         await campaign.save();
+        
+        // Emit status update for failed message too
+        if (io) {
+          io.emit('campaign-progress-update', {
+            campaignId: campaign._id,
+            progress: campaign.progress
+          });
+        }
       }
+      
       // Rate limiting
       if (i < contacts.length - 1) {
         await new Promise((resolve) => setTimeout(resolve, delayBetweenMessages));
       }
     }
+    
     // Mark campaign as completed
     campaign.status = 'completed';
     await campaign.save();
+    
+    // Emit completion status
+    if (io) {
+      io.emit('campaign-status-update', {
+        campaignId: campaign._id,
+        status: 'completed',
+        progress: campaign.progress
+      });
+    }
+    
+    console.log(`✅ Campaign ${campaign._id} completed. Sent: ${campaign.progress.sent}, Failed: ${campaign.progress.failed}`);
+    
   } catch (error) {
     console.error('Error sending campaign messages:', error);
     campaign.status = 'failed';
     await campaign.save();
+    
+    if (io) {
+      io.emit('campaign-status-update', {
+        campaignId: campaign._id,
+        status: 'failed',
+        error: error.message
+      });
+    }
+    
     throw error;
   }
 };
@@ -238,11 +281,12 @@ const formatPhoneNumber = (phone) => {
   // Remove any non-digit characters
   let cleaned = phone.replace(/\D/g, '');
 
-  // If number doesn't start with country code, add India's code
-  if (!cleaned.startsWith('91')) {
+  // If number doesn't start with country code, add India's code (91)
+  if (!cleaned.startsWith('91') && cleaned.length === 10) {
     cleaned = '91' + cleaned;
   }
 
+  console.log(`Phone formatting: ${phone} -> ${cleaned}`);
   return cleaned;
 };
 
