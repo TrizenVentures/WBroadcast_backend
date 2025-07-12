@@ -11,14 +11,9 @@ const messageSchema = new mongoose.Schema({
     ref: 'Contact',
     required: true
   },
-  templateId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Template',
-    required: true
-  },
   content: {
     type: String,
-    required: true
+    required: false // Make optional for failed messages
   },
   status: {
     type: String,

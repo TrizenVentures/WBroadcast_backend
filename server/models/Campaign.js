@@ -1,4 +1,3 @@
-
 import mongoose from 'mongoose';
 
 const campaignSchema = new mongoose.Schema({
@@ -7,10 +6,18 @@ const campaignSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
-  templateId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Template',
+  // WhatsApp API template fields
+  templateName: {
+    type: String,
     required: true
+  },
+  templateLanguage: {
+    type: String,
+    required: true
+  },
+  templateComponents: {
+    type: Array,
+    default: []
   },
   contactGroups: [{
     type: mongoose.Schema.Types.ObjectId,

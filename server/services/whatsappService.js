@@ -1,20 +1,18 @@
 import axios from 'axios';
 import Contact from '../models/Contact.js';
-import Template from '../models/Template.js';
 import Message from '../models/Message.js';
 import Campaign from '../models/Campaign.js';
 
-const WHATSAPP_API_URL = 'https://graph.facebook.com/v18.0';
+const WHATSAPP_API_URL = 'https://graph.facebook.com/v22.0'; // Use v22.0 as in working curl
 const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
 export const sendCampaignMessages = async (campaign, io) => {
   try {
-    // Get template
-    const template = await Template.findById(campaign.templateId);
-    if (!template) {
-      throw new Error('Template not found');
-    }
+    // Use campaign.templateName, templateLanguage, templateComponents directly
+    const templateName = campaign.templateName;
+    const templateLanguage = campaign.templateLanguage || 'en';
+    const templateComponents = campaign.templateComponents || [];
 
     // Get contacts
     const contacts = await Contact.find({
@@ -31,133 +29,111 @@ export const sendCampaignMessages = async (campaign, io) => {
     campaign.progress.total = contacts.length;
     await campaign.save();
 
-    // Send messages with rate limiting
-    // Meta's default rate limit is 80 messages per second
+    // Use only one declaration for rate limiting
     const rateLimitPerMinute = campaign.rateLimitPerMinute || 1000;
     const delayBetweenMessages = (60 * 1000) / rateLimitPerMinute;
 
     for (let i = 0; i < contacts.length; i++) {
       const contact = contacts[i];
-
       try {
-        // Create message record
-        const messageContent = replaceVariables(template.body, campaign.variables, contact);
+        // Build WhatsApp template payload
+        const formattedPhone = formatPhoneNumber(contact.phone);
+        const templatePayload = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: formattedPhone,
+          type: 'template',
+          template: {
+            name: templateName,
+            language: { code: templateLanguage },
+            components: templateComponents // Pass components as-is from campaign
+          }
+        };
 
+        // Send WhatsApp template message
+        try {
+          const response = await axios.post(
+            `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`,
+            templatePayload,
+            {
+              headers: {
+                'Authorization': `Bearer ${ACCESS_TOKEN}`,
+                'Content-Type': 'application/json'
+              }
+            }
+          );
+          console.log('WhatsApp API Response:', JSON.stringify(response.data, null, 2));
+
+          // Create message record
+          const message = new Message({
+            campaignId: campaign._id,
+            contactId: contact._id,
+            content: JSON.stringify(templatePayload),
+            status: 'sent',
+            whatsappMessageId: response.data.messages?.[0]?.id || null,
+            sentAt: new Date()
+          });
+          await message.save();
+
+          // Update campaign progress
+          campaign.progress.sent++;
+          await campaign.save();
+
+          // Emit status update
+          if (io) {
+            io.to(campaign._id.toString()).emit('campaign-progress', {
+              campaignId: campaign._id,
+              progress: campaign.progress
+            });
+          }
+        } catch (err) {
+          // Log the error response for debugging
+          if (err.response) {
+            console.error('WhatsApp API Error:', JSON.stringify(err.response.data, null, 2));
+          } else {
+            console.error('WhatsApp API Error:', err.message);
+          }
+          // Handle individual message error
+          const message = new Message({
+            campaignId: campaign._id,
+            contactId: contact._id,
+            content: JSON.stringify(templatePayload),
+            status: 'failed',
+            errorMessage: err.message,
+            sentAt: new Date()
+          });
+          await message.save();
+          campaign.progress.failed++;
+          await campaign.save();
+        }
+      } catch (err) {
+        // Handle individual message error
         const message = new Message({
           campaignId: campaign._id,
           contactId: contact._id,
-          templateId: template._id,
-          content: messageContent,
-          status: 'pending'
+          content: '',
+          status: 'failed',
+          errorMessage: err.message,
+          sentAt: new Date()
         });
-
         await message.save();
-
-        // Determine message type and send accordingly
-        let whatsappResponse;
-        
-        if (template.whatsappTemplateName && template.whatsappTemplateName.trim() !== '') {
-          // Send as WhatsApp template
-          whatsappResponse = await sendWhatsAppTemplateMessage(
-            contact.phone, 
-            template, 
-            campaign.variables, 
-            contact
-          );
-        } else {
-          // Send as simple text message
-          whatsappResponse = await sendWhatsAppTextMessage(contact.phone, messageContent);
-        }
-
-        if (whatsappResponse.success) {
-          message.status = 'sent';
-          message.whatsappMessageId = whatsappResponse.messageId;
-          message.sentAt = new Date();
-          campaign.progress.sent++;
-        } else {
-          message.status = 'failed';
-          message.errorMessage = whatsappResponse.error;
-          campaign.progress.failed++;
-        }
-
-        await message.save();
-        await campaign.save();
-
-        // Emit progress update
-        io.emit('campaign-progress-update', {
-          campaignId: campaign._id,
-          progress: campaign.progress,
-          currentContact: i + 1,
-          totalContacts: contacts.length
-        });
-
-        // Rate limiting delay
-        if (i < contacts.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, delayBetweenMessages));
-        }
-
-      } catch (error) {
-        console.error(`Error sending message to ${contact.phone}:`, error);
-
-        const message = await Message.findOne({
-          campaignId: campaign._id,
-          contactId: contact._id
-        });
-
-        if (message) {
-          message.status = 'failed';
-          message.errorMessage = error.message;
-          await message.save();
-        }
-
         campaign.progress.failed++;
         await campaign.save();
       }
+      // Rate limiting
+      if (i < contacts.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delayBetweenMessages));
+      }
     }
-
     // Mark campaign as completed
     campaign.status = 'completed';
     await campaign.save();
-
-    // Emit completion
-    io.emit('campaign-completed', {
-      campaignId: campaign._id,
-      progress: campaign.progress
-    });
-
-    console.log(`Campaign ${campaign._id} completed. Sent: ${campaign.progress.sent}, Failed: ${campaign.progress.failed}`);
-
   } catch (error) {
-    console.error('Error in sendCampaignMessages:', error);
-
+    console.error('Error sending campaign messages:', error);
     campaign.status = 'failed';
     await campaign.save();
-
     throw error;
   }
-};
-
-const replaceVariables = (template, variables, contact) => {
-  let message = template;
-
-  // Replace campaign variables
-  for (const [key, value] of variables) {
-    const regex = new RegExp(`{{${key}}}`, 'g');
-    message = message.replace(regex, value);
-  }
-
-  // Replace contact-specific variables
-  message = message.replace(/{{name}}/g, contact.name);
-  message = message.replace(/{{phone}}/g, contact.phone);
-  message = message.replace(/{{email}}/g, contact.email || '');
-
-  // Replace metadata variables
-  for (const [key, value] of contact.metadata) {
-    const regex = new RegExp(`{{${key}}}`, 'g');
-    message = message.replace(regex, value);
-  }
-
-  return message;
 };
 
 // Webhook handler for message status updates
@@ -362,7 +338,7 @@ const sendWhatsAppTemplateMessage = async (phone, template, campaignVariables, c
     if (bodyVariables.length > 0) {
       const bodyParameters = bodyVariables.map(variable => {
         let value = '';
-        
+
         // Try to get value from campaign variables first
         if (campaignVariables && campaignVariables.has(variable)) {
           value = campaignVariables.get(variable);
@@ -377,7 +353,7 @@ const sendWhatsAppTemplateMessage = async (phone, template, campaignVariables, c
         } else if (contact.metadata && contact.metadata.has(variable)) {
           value = contact.metadata.get(variable);
         }
-        
+
         return {
           type: 'text',
           text: value
@@ -445,7 +421,7 @@ const sendWhatsAppTemplateMessage = async (phone, template, campaignVariables, c
 export const fetchLiveWhatsAppTemplates = async () => {
   try {
     const BUSINESS_ACCOUNT_ID = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
-    
+
     if (!BUSINESS_ACCOUNT_ID) {
       throw new Error('WHATSAPP_BUSINESS_ACCOUNT_ID environment variable is required');
     }
@@ -525,7 +501,7 @@ export const fetchLiveWhatsAppTemplates = async () => {
 // Helper function to extract body text from template components
 const extractBodyFromComponents = (components) => {
   if (!components || !Array.isArray(components)) return '';
-  
+
   const bodyComponent = components.find(comp => comp.type === 'BODY');
   return bodyComponent?.text || '';
 };
@@ -533,9 +509,9 @@ const extractBodyFromComponents = (components) => {
 // Helper function to extract variables from template components
 const extractVariablesFromComponents = (components) => {
   if (!components || !Array.isArray(components)) return [];
-  
+
   const variables = [];
-  
+
   components.forEach(component => {
     if (component.text) {
       // Extract {{1}}, {{2}}, etc. from the text
@@ -554,7 +530,7 @@ const extractVariablesFromComponents = (components) => {
       }
     }
   });
-  
+
   return variables;
 };
 
@@ -567,10 +543,10 @@ const hasButtonComponents = (components) => {
 // Helper function to extract buttons from components
 const extractButtonsFromComponents = (components) => {
   if (!components || !Array.isArray(components)) return [];
-  
+
   const buttonComponent = components.find(comp => comp.type === 'BUTTONS');
   if (!buttonComponent || !buttonComponent.buttons) return [];
-  
+
   return buttonComponent.buttons.map(button => ({
     type: button.type === 'QUICK_REPLY' ? 'quick_reply' : 'call_to_action',
     text: button.text,
@@ -581,15 +557,15 @@ const extractButtonsFromComponents = (components) => {
 // Helper function to get header type
 const getHeaderType = (components) => {
   if (!components || !Array.isArray(components)) return 'none';
-  
+
   const headerComponent = components.find(comp => comp.type === 'HEADER');
   if (!headerComponent) return 'none';
-  
+
   if (headerComponent.format === 'TEXT') return 'text';
   if (headerComponent.format === 'IMAGE') return 'image';
   if (headerComponent.format === 'VIDEO') return 'video';
   if (headerComponent.format === 'DOCUMENT') return 'document';
-  
+
   return 'none';
 };
 
@@ -598,12 +574,12 @@ const extractTemplateVariables = (templateBody) => {
   const variableRegex = /{{(\w+)}}/g;
   const variables = [];
   let match;
-  
+
   while ((match = variableRegex.exec(templateBody)) !== null) {
     if (!variables.includes(match[1])) {
       variables.push(match[1]);
     }
   }
-  
+
   return variables;
 };

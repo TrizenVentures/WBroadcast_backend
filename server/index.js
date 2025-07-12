@@ -37,6 +37,9 @@ const io = new Server(server, {
   }
 });
 
+// Add this near the top of your backend entry point
+console.log('CLIENT_URL at startup:', process.env.CLIENT_URL);
+
 // Configure Express CORS
 app.use(cors({
   origin: function (origin, callback) {
