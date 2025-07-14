@@ -152,6 +152,8 @@ export const cancelCampaign = async (campaignId) => {
     const job = await campaignQueue.getJob(campaign.jobId);
     if (job) {
       await job.remove();
+    } else {
+      console.log(`Job ${campaign.jobId} not found in queue, may have already been processed or removed`);
     }
 
     // Update campaign status

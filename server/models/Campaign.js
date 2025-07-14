@@ -50,7 +50,6 @@ const campaignSchema = new mongoose.Schema({
   },
   jobId: {
     type: String,
-    unique: true,
     sparse: true
   },
   createdBy: {
