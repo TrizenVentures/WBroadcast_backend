@@ -3,7 +3,7 @@ import Contact from '../models/Contact.js';
 import Message from '../models/Message.js';
 import Campaign from '../models/Campaign.js';
 
-const WHATSAPP_API_URL = 'https://graph.facebook.com/v22.0';
+const WHATSAPP_API_URL = 'https://graph.facebook.com/v23.0';
 const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
@@ -21,6 +21,17 @@ export const sendCampaignMessages = async (campaign, io) => {
       templateLanguage: campaign.templateLanguage,
       templateComponents: campaign.templateComponents
     });
+
+    // Fetch template details to validate components
+    const templateResponse = await fetchLiveWhatsAppTemplates();
+    if (!templateResponse.success) {
+      throw new Error(`Failed to fetch templates: ${templateResponse.error}`);
+    }
+    const template = templateResponse.templates.find(t => t.name === campaign.templateName);
+    if (!template) {
+      throw new Error(`Template ${campaign.templateName} not found or not approved`);
+    }
+    console.log(`Template details for ${campaign.templateName}:`, JSON.stringify(template, null, 2));
 
     // Get contacts
     const contacts = await Contact.find({
@@ -47,27 +58,93 @@ export const sendCampaignMessages = async (campaign, io) => {
     for (let i = 0; i < contacts.length; i++) {
       const contact = contacts[i];
       console.log(`Processing contact ${i + 1}/${contacts.length}: ${contact.name} (${contact.phone})`);
-      
+
+      let templatePayload = {};
       try {
         const formattedPhone = formatPhoneNumber(contact.phone);
         console.log(`Formatted phone: ${contact.phone} -> ${formattedPhone}`);
-        
-        // Build WhatsApp template payload matching your working curl
-        const templatePayload = {
+
+        // Build WhatsApp template payload
+        templatePayload = {
           messaging_product: 'whatsapp',
           to: formattedPhone,
           type: 'template',
           template: {
             name: campaign.templateName,
-            language: { 
-              code: campaign.templateLanguage || 'en_US' 
+            language: {
+              code: campaign.templateLanguage || 'en'
             }
           }
         };
 
         // Only add components if they exist and are not empty
         if (campaign.templateComponents && campaign.templateComponents.length > 0) {
-          templatePayload.template.components = campaign.templateComponents;
+          const sanitizedComponents = campaign.templateComponents.map(component => {
+            // Handle HEADER component
+            if (component.type === 'HEADER') {
+              const templateHeader = template.components.find(c => c.type === 'HEADER');
+              if (!templateHeader || campaign.templateName === 'hello_world') {
+                return { type: 'header' }; // Static header
+              }
+              if (templateHeader.format === 'TEXT' && templateHeader.text?.includes('{{')) {
+                return {
+                  type: 'header',
+                  parameters: [{ type: 'text', text: component.text || '' }]
+                };
+              }
+              if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(templateHeader.format)) {
+                return {
+                  type: 'header',
+                  parameters: [{ type: templateHeader.format.toLowerCase(), [templateHeader.format.toLowerCase()]: component.mediaId || '' }]
+                };
+              }
+              return { type: 'header' };
+            }
+
+            // Handle BODY component
+            if (component.type === 'BODY' && component.text) {
+              const templateBody = template.components.find(c => c.type === 'BODY');
+              if (!templateBody || campaign.templateName === 'hello_world') {
+                return { type: 'body' }; // Static body
+              }
+              const variables = extractVariablesFromComponents([templateBody]);
+              if (variables.length > 0) {
+                return {
+                  type: 'body',
+                  parameters: variables.map((_, index) => ({
+                    type: 'text',
+                    text: component.text || ''
+                  }))
+                };
+              }
+              return { type: 'body' };
+            }
+
+            // Handle BUTTONS component
+            if (component.type === 'BUTTONS') {
+              const templateButtons = template.components.find(c => c.type === 'BUTTONS');
+              if (templateButtons?.buttons?.length > 0) {
+                return templateButtons.buttons.map((button, index) => ({
+                  type: 'button',
+                  sub_type: 'quick_reply',
+                  index: index,
+                  parameters: [
+                    {
+                      type: 'payload',
+                      payload: button.text
+                    }
+                  ]
+                }));
+              }
+            }
+
+            // Omit FOOTER
+            if (component.type === 'FOOTER') {
+              return null;
+            }
+            return component;
+          }).flat().filter(Boolean);
+          templatePayload.template.components = sanitizedComponents;
         }
 
         console.log('Sending WhatsApp message with payload:', JSON.stringify(templatePayload, null, 2));
@@ -83,7 +160,7 @@ export const sendCampaignMessages = async (campaign, io) => {
             }
           }
         );
-        
+
         console.log('✅ WhatsApp API Success Response:', JSON.stringify(response.data, null, 2));
 
         // Create message record
@@ -108,7 +185,7 @@ export const sendCampaignMessages = async (campaign, io) => {
             progress: campaign.progress
           });
         }
-        
+
       } catch (err) {
         console.error('❌ Error sending message to contact:', contact.phone);
         if (err.response) {
@@ -118,12 +195,12 @@ export const sendCampaignMessages = async (campaign, io) => {
         } else {
           console.error('Error details:', err.message);
         }
-        
+
         // Handle individual message error
         const message = new Message({
           campaignId: campaign._id,
           contactId: contact._id,
-          content: JSON.stringify(templatePayload),
+          content: JSON.stringify(templatePayload || {}),
           status: 'failed',
           errorMessage: err.response?.data?.error?.message || err.message,
           sentAt: new Date()
@@ -131,8 +208,8 @@ export const sendCampaignMessages = async (campaign, io) => {
         await message.save();
         campaign.progress.failed++;
         await campaign.save();
-        
-        // Emit status update for failed message too
+
+        // Emit status update for failed message
         if (io) {
           io.emit('campaign-progress-update', {
             campaignId: campaign._id,
@@ -140,17 +217,17 @@ export const sendCampaignMessages = async (campaign, io) => {
           });
         }
       }
-      
+
       // Rate limiting
       if (i < contacts.length - 1) {
         await new Promise((resolve) => setTimeout(resolve, delayBetweenMessages));
       }
     }
-    
+
     // Mark campaign as completed
     campaign.status = 'completed';
     await campaign.save();
-    
+
     // Emit completion status
     if (io) {
       io.emit('campaign-status-update', {
@@ -159,14 +236,14 @@ export const sendCampaignMessages = async (campaign, io) => {
         progress: campaign.progress
       });
     }
-    
+
     console.log(`✅ Campaign ${campaign._id} completed. Sent: ${campaign.progress.sent}, Failed: ${campaign.progress.failed}`);
-    
+
   } catch (error) {
     console.error('Error sending campaign messages:', error);
     campaign.status = 'failed';
     await campaign.save();
-    
+
     if (io) {
       io.emit('campaign-status-update', {
         campaignId: campaign._id,
@@ -174,7 +251,7 @@ export const sendCampaignMessages = async (campaign, io) => {
         error: error.message
       });
     }
-    
+
     throw error;
   }
 };
@@ -377,7 +454,25 @@ const sendWhatsAppTemplateMessage = async (phone, template, campaignVariables, c
     // Add components if template has dynamic content or buttons
     const components = [];
 
-    // Handle body parameters (if template has variables in body)
+    // Handle HEADER component
+    const templateHeader = template.components.find(c => c.type === 'HEADER');
+    if (templateHeader) {
+      if (templateHeader.format === 'TEXT' && templateHeader.text?.includes('{{')) {
+        components.push({
+          type: 'header',
+          parameters: [{ type: 'text', text: templateHeader.text || '' }]
+        });
+      } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(templateHeader.format)) {
+        components.push({
+          type: 'header',
+          parameters: [{ type: templateHeader.format.toLowerCase(), [templateHeader.format.toLowerCase()]: '' }]
+        });
+      } else {
+        components.push({ type: 'header' });
+      }
+    }
+
+    // Handle BODY component
     const bodyVariables = extractTemplateVariables(template.body);
     if (bodyVariables.length > 0) {
       const bodyParameters = bodyVariables.map(variable => {
@@ -408,13 +503,25 @@ const sendWhatsAppTemplateMessage = async (phone, template, campaignVariables, c
         type: 'body',
         parameters: bodyParameters
       });
+    } else {
+      components.push({ type: 'body' });
     }
 
-    // Handle buttons (for templates with quick reply buttons)
+    // Handle BUTTONS component
     if (template.whatsappConfig?.hasButtons && template.whatsappConfig.buttons?.length > 0) {
-      // For quick reply buttons, we don't need to send parameters
-      // The buttons are already defined in the template
-      console.log(`Template has ${template.whatsappConfig.buttons.length} buttons configured`);
+      const buttonComponents = template.whatsappConfig.buttons.map((button, index) => ({
+        type: 'button',
+        sub_type: 'quick_reply',
+        index: index,
+        parameters: [
+          {
+            type: 'payload',
+            payload: button.text
+          }
+        ]
+      }));
+      components.push(...buttonComponents);
+      console.log(`Added ${buttonComponents.length} button components to payload`);
     }
 
     // Add components to template if any exist
