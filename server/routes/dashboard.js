@@ -17,11 +17,11 @@ router.get('/stats', authenticate, async (req, res) => {
     const totalContacts = await Contact.countDocuments({ status: 'active' });
     const messagesSent = await Message.countDocuments({ status: { $in: ['sent', 'delivered', 'read'] } });
     const activeTemplates = await Template.countDocuments({ status: 'approved' });
-    
+
     // Calculate delivery rate
     const totalMessages = await Message.countDocuments();
-    const deliveredMessages = await Message.countDocuments({ 
-      status: { $in: ['delivered', 'read'] } 
+    const deliveredMessages = await Message.countDocuments({
+      status: { $in: ['delivered', 'read'] }
     });
     const deliveryRate = totalMessages > 0 ? Math.round((deliveredMessages / totalMessages) * 100) : 0;
 
@@ -99,7 +99,7 @@ router.get('/recent-activity', authenticate, async (req, res) => {
     const recentCampaigns = await Campaign.find()
       .sort({ updatedAt: -1 })
       .limit(5)
-      .populate('templateId', 'name');
+      .populate('name');
 
     recentCampaigns.forEach(campaign => {
       let status = 'info';
@@ -238,14 +238,14 @@ router.get('/active-campaigns', authenticate, async (req, res) => {
     const activeCampaigns = await Campaign.find({
       status: { $in: ['sending', 'scheduled', 'paused'] }
     })
-    .sort({ createdAt: -1 })
-    .select('name status progress createdAt scheduledAt');
+      .sort({ createdAt: -1 })
+      .select('name status progress createdAt scheduledAt');
 
     const formattedCampaigns = activeCampaigns.map(campaign => ({
       _id: campaign._id,
       name: campaign.name,
       status: campaign.status,
-      progress: campaign.progress.total > 0 
+      progress: campaign.progress.total > 0
         ? Math.round((campaign.progress.sent / campaign.progress.total) * 100)
         : 0,
       sent: campaign.progress.sent,
@@ -266,14 +266,14 @@ const calculatePeriodDeliveryRate = async (startDate, endDate) => {
   const totalMessages = await Message.countDocuments({
     createdAt: { $gte: startDate, $lt: endDate }
   });
-  
+
   if (totalMessages === 0) return 0;
-  
+
   const deliveredMessages = await Message.countDocuments({
     createdAt: { $gte: startDate, $lt: endDate },
     status: { $in: ['delivered', 'read'] }
   });
-  
+
   return Math.round((deliveredMessages / totalMessages) * 100);
 };
 
