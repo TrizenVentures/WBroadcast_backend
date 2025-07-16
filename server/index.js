@@ -11,6 +11,8 @@ import campaignRoutes from './routes/campaigns.js';
 import contactRoutes from './routes/contacts.js';
 import templateRoutes from './routes/templates.js';
 import n8nRoutes from './routes/n8n.js';
+import dashboardRoutes from './routes/dashboard.js';
+import notificationRoutes from './routes/notifications.js';
 import { initializeScheduler } from './services/scheduler.js';
 import { setupSocketHandlers } from './services/socketService.js';
 
@@ -110,6 +112,8 @@ app.use('/api/campaigns', campaignRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/n8n', n8nRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -118,6 +122,9 @@ app.get('/api/health', (req, res) => {
 
 // Socket.IO setup
 setupSocketHandlers(io);
+
+// Make io available to routes for emitting events
+app.set('io', io);
 
 const PORT = process.env.PORT || 3001;
 
