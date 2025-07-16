@@ -2,6 +2,12 @@ import axios from 'axios';
 import Contact from '../models/Contact.js';
 import Message from '../models/Message.js';
 import Campaign from '../models/Campaign.js';
+import { 
+  notifyBroadcastCompleted, 
+  notifyBroadcastFailed, 
+  notifyBroadcastStarted,
+  notifyMessageFailed 
+} from './notificationService.js';
 
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v23.0';
 const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -49,6 +55,20 @@ export const sendCampaignMessages = async (campaign, io) => {
     // Update campaign progress
     campaign.progress.total = contacts.length;
     await campaign.save();
+
+    // Update campaign status to sending
+    campaign.status = 'sending';
+    await campaign.save();
+
+    // Notify that broadcast has started
+    await notifyBroadcastStarted('system', campaign, io);
+
+    // Emit status update
+    io.emit('campaign-status-update', {
+      campaignId: campaign._id,
+      status: 'sending',
+      progress: campaign.progress
+    });
 
     const rateLimitPerMinute = campaign.rateLimitPerMinute || 1000;
     const delayBetweenMessages = (60 * 1000) / rateLimitPerMinute;
@@ -209,6 +229,9 @@ export const sendCampaignMessages = async (campaign, io) => {
         campaign.progress.failed++;
         await campaign.save();
 
+        // Notify about message failure
+        await notifyMessageFailed('system', message, contact, campaign, err.response?.data?.error?.message || err.message, io);
+
         // Emit status update for failed message
         if (io) {
           io.emit('campaign-progress-update', {
@@ -228,12 +251,21 @@ export const sendCampaignMessages = async (campaign, io) => {
     campaign.status = 'completed';
     await campaign.save();
 
+    // Notify that broadcast has completed
+    await notifyBroadcastCompleted('system', campaign, io);
+
     // Emit completion status
     if (io) {
       io.emit('campaign-status-update', {
         campaignId: campaign._id,
         status: 'completed',
         progress: campaign.progress
+      });
+
+      // Emit dashboard update
+      io.emit('dashboard-update', {
+        type: 'campaign',
+        data: { campaignId: campaign._id, status: 'completed' }
       });
     }
 
@@ -243,6 +275,9 @@ export const sendCampaignMessages = async (campaign, io) => {
     console.error('Error sending campaign messages:', error);
     campaign.status = 'failed';
     await campaign.save();
+
+    // Notify about broadcast failure
+    await notifyBroadcastFailed('system', campaign, error.message, io);
 
     if (io) {
       io.emit('campaign-status-update', {

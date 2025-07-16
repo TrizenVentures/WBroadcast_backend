@@ -1,5 +1,6 @@
 import express from 'express';
 import Contact from '../models/Contact.js';
+import { notifyContactAdded } from '../services/notificationService.js';
 
 const router = express.Router();
 
@@ -62,6 +63,13 @@ router.post('/', async (req, res) => {
   try {
     const contact = new Contact(req.body);
     await contact.save();
+
+    // Notify about new contact (if user is authenticated)
+    if (req.user) {
+      const io = req.app.get('io');
+      await notifyContactAdded(req.user._id, contact, io);
+    }
+
     res.status(201).json(contact);
   } catch (error) {
     if (error.code === 11000) {
