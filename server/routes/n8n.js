@@ -1,10 +1,10 @@
-
 import express from 'express';
 import Campaign from '../models/Campaign.js';
 import Contact from '../models/Contact.js';
 import Template from '../models/Template.js';
+import Response from '../models/Response.js';
 import { scheduleCampaign } from '../services/scheduler.js';
-import { handleWhatsAppWebhook } from '../services/whatsappService.js';
+import { handleWhatsAppWebhook, sendWhatsAppTextMessage } from '../services/whatsappService.js';
 
 const router = express.Router();
 
@@ -151,6 +151,158 @@ router.post('/webhook/calendar', async (req, res) => {
 
   } catch (error) {
     console.error('Error processing calendar webhook:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint for n8n to send automated responses back to WhatsApp
+router.post('/send-response', async (req, res) => {
+  try {
+    const {
+      responseId,
+      phone,
+      message,
+      responseType = 'text'
+    } = req.body;
+
+    console.log('Received n8n response request:', req.body);
+
+    if (!phone || !message) {
+      return res.status(400).json({
+        success: false,
+        error: 'Phone and message are required'
+      });
+    }
+
+    // Send the response message via WhatsApp
+    const result = await sendWhatsAppTextMessage(phone, message);
+
+    if (result.success) {
+      // Update the response record if responseId is provided
+      if (responseId) {
+        const response = await Response.findById(responseId);
+        if (response) {
+          response.autoResponseSent = true;
+          response.autoResponseMessageId = result.messageId;
+          response.n8nResponseSent = true;
+          await response.save();
+        }
+      }
+
+      res.json({
+        success: true,
+        messageId: result.messageId,
+        message: 'Response sent successfully'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+  } catch (error) {
+    console.error('Error sending n8n response:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Get responses for a specific campaign
+router.get('/responses/:campaignId', async (req, res) => {
+  try {
+    const { campaignId } = req.params;
+    const { page = 1, limit = 50, processed } = req.query;
+
+    const query = { originalCampaignId: campaignId };
+    if (processed !== undefined) {
+      query.processed = processed === 'true';
+    }
+
+    const responses = await Response.find(query)
+      .populate('contactId', 'name phone email')
+      .populate('originalCampaignId', 'name')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const total = await Response.countDocuments(query);
+
+    res.json({
+      success: true,
+      responses,
+      total,
+      totalPages: Math.ceil(total / limit),
+      currentPage: parseInt(page)
+    });
+  } catch (error) {
+    console.error('Error fetching campaign responses:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Get all responses with filtering
+router.get('/responses', async (req, res) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 50, 
+      responseType, 
+      processed, 
+      phone,
+      campaignId 
+    } = req.query;
+
+    const query = {};
+    
+    if (responseType) query.responseType = responseType;
+    if (processed !== undefined) query.processed = processed === 'true';
+    if (phone) query.fromPhone = { $regex: phone, $options: 'i' };
+    if (campaignId) query.originalCampaignId = campaignId;
+
+    const responses = await Response.find(query)
+      .populate('contactId', 'name phone email')
+      .populate('originalCampaignId', 'name')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const total = await Response.countDocuments(query);
+
+    // Get response statistics
+    const stats = await Response.aggregate([
+      { $match: query },
+      {
+        $group: {
+          _id: '$responseType',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const responseStats = {};
+    stats.forEach(stat => {
+      responseStats[stat._id] = stat.count;
+    });
+
+    res.json({
+      success: true,
+      responses,
+      total,
+      totalPages: Math.ceil(total / limit),
+      currentPage: parseInt(page),
+      stats: responseStats
+    });
+  } catch (error) {
+    console.error('Error fetching responses:', error);
     res.status(500).json({
       success: false,
       error: error.message

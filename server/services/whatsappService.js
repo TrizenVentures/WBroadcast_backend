@@ -2,12 +2,15 @@ import axios from 'axios';
 import Contact from '../models/Contact.js';
 import Message from '../models/Message.js';
 import Campaign from '../models/Campaign.js';
+import Response from '../models/Response.js';
 import { 
   notifyBroadcastCompleted, 
   notifyBroadcastFailed, 
   notifyBroadcastStarted,
-  notifyMessageFailed 
+  notifyMessageFailed,
+  notifyIncomingResponse
 } from './notificationService.js';
+import axios from 'axios';
 
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v23.0';
 const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -318,7 +321,7 @@ export const handleWhatsAppWebhook = async (webhookData) => {
           if (messages) {
             for (const message of messages) {
               console.log('Received incoming message:', JSON.stringify(message, null, 2));
-              // You can implement handling for incoming messages here if needed
+              await handleIncomingMessage(message);
             }
           }
         }
@@ -327,6 +330,208 @@ export const handleWhatsAppWebhook = async (webhookData) => {
   } catch (error) {
     console.error('Error handling WhatsApp webhook:', error);
     throw error; // Rethrow to be handled by the route error handler
+  }
+};
+
+// Enhanced function to handle incoming messages and responses
+const handleIncomingMessage = async (messageData) => {
+  try {
+    console.log('Processing incoming message:', JSON.stringify(messageData, null, 2));
+    
+    const { id: whatsappMessageId, from, type, timestamp } = messageData;
+    
+    // Find or create contact
+    let contact = await Contact.findOne({ phone: from });
+    if (!contact) {
+      // Create new contact from incoming message
+      contact = new Contact({
+        name: `Contact ${from}`,
+        phone: from,
+        status: 'active'
+      });
+      await contact.save();
+      console.log(`Created new contact for ${from}`);
+    }
+    
+    let responseContent = '';
+    let responseType = type;
+    let buttonPayload = null;
+    let buttonText = null;
+    
+    // Extract response content based on message type
+    switch (type) {
+      case 'text':
+        responseContent = messageData.text?.body || '';
+        break;
+        
+      case 'button':
+        responseContent = messageData.button?.text || '';
+        buttonPayload = messageData.button?.payload || '';
+        buttonText = messageData.button?.text || '';
+        responseType = 'button';
+        break;
+        
+      case 'interactive':
+        if (messageData.interactive?.type === 'button_reply') {
+          responseContent = messageData.interactive.button_reply.title || '';
+          buttonPayload = messageData.interactive.button_reply.id || '';
+          buttonText = messageData.interactive.button_reply.title || '';
+          responseType = 'button';
+        } else if (messageData.interactive?.type === 'list_reply') {
+          responseContent = messageData.interactive.list_reply.title || '';
+          buttonPayload = messageData.interactive.list_reply.id || '';
+          responseType = 'interactive';
+        }
+        break;
+        
+      case 'image':
+      case 'video':
+      case 'audio':
+      case 'document':
+        responseContent = messageData[type]?.caption || `[${type.toUpperCase()}]`;
+        responseType = 'media';
+        break;
+        
+      default:
+        responseContent = `[${type.toUpperCase()} MESSAGE]`;
+        console.log(`Unhandled message type: ${type}`);
+    }
+    
+    // Try to find the original campaign/message this is responding to
+    const originalContext = await findOriginalContext(contact._id);
+    
+    // Create response record
+    const response = new Response({
+      whatsappMessageId,
+      fromPhone: from,
+      responseType,
+      responseContent,
+      contactId: contact._id,
+      originalCampaignId: originalContext?.campaignId || null,
+      originalMessageId: originalContext?.messageId || null,
+      buttonPayload,
+      buttonText,
+      rawWebhookData: messageData
+    });
+    
+    await response.save();
+    console.log(`✅ Response saved: ${response._id}`);
+    
+    // Trigger n8n workflow for automated response
+    await triggerN8nResponseWorkflow(response, contact, originalContext);
+    
+    // Create notification for new response
+    await notifyIncomingResponse('system', response, contact, originalContext?.campaign);
+    
+    return response;
+    
+  } catch (error) {
+    console.error('Error handling incoming message:', error);
+    throw error;
+  }
+};
+
+// Function to find the original campaign/message context
+const findOriginalContext = async (contactId) => {
+  try {
+    // Find the most recent message sent to this contact
+    const recentMessage = await Message.findOne({
+      contactId,
+      status: { $in: ['sent', 'delivered', 'read'] }
+    })
+    .sort({ sentAt: -1 })
+    .populate('campaignId');
+    
+    if (recentMessage) {
+      return {
+        messageId: recentMessage._id,
+        campaignId: recentMessage.campaignId._id,
+        campaign: recentMessage.campaignId
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error finding original context:', error);
+    return null;
+  }
+};
+
+// Function to trigger n8n workflow for automated responses
+const triggerN8nResponseWorkflow = async (response, contact, originalContext) => {
+  try {
+    const n8nWebhookUrl = process.env.N8N_RESPONSE_WEBHOOK_URL;
+    
+    if (!n8nWebhookUrl) {
+      console.log('N8N_RESPONSE_WEBHOOK_URL not configured, skipping n8n trigger');
+      return;
+    }
+    
+    // Prepare payload for n8n
+    const n8nPayload = {
+      // Response details
+      responseId: response._id,
+      responseType: response.responseType,
+      responseContent: response.responseContent,
+      buttonPayload: response.buttonPayload,
+      buttonText: response.buttonText,
+      
+      // Contact details
+      contact: {
+        id: contact._id,
+        name: contact.name,
+        phone: contact.phone,
+        email: contact.email,
+        tags: contact.tags,
+        metadata: Object.fromEntries(contact.metadata || new Map())
+      },
+      
+      // Original context
+      originalContext: originalContext ? {
+        campaignId: originalContext.campaignId,
+        campaignName: originalContext.campaign?.name,
+        messageId: originalContext.messageId
+      } : null,
+      
+      // Timestamp
+      timestamp: new Date().toISOString(),
+      
+      // WhatsApp details
+      whatsapp: {
+        messageId: response.whatsappMessageId,
+        fromPhone: response.fromPhone
+      }
+    };
+    
+    console.log('Triggering n8n workflow with payload:', JSON.stringify(n8nPayload, null, 2));
+    
+    // Send to n8n webhook
+    const n8nResponse = await axios.post(n8nWebhookUrl, n8nPayload, {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000 // 10 second timeout
+    });
+    
+    console.log('✅ n8n workflow triggered successfully:', n8nResponse.status);
+    
+    // Update response record
+    response.n8nWorkflowTriggered = true;
+    response.processedAt = new Date();
+    await response.save();
+    
+    return n8nResponse.data;
+    
+  } catch (error) {
+    console.error('❌ Error triggering n8n workflow:', error.message);
+    
+    // Log the error but don't throw - we don't want to break the webhook processing
+    if (error.response) {
+      console.error('n8n Response Status:', error.response.status);
+      console.error('n8n Response Data:', error.response.data);
+    }
+    
+    return null;
   }
 };
 
@@ -403,7 +608,7 @@ const formatPhoneNumber = (phone) => {
 };
 
 // Function to send simple text message via WhatsApp Cloud API
-const sendWhatsAppTextMessage = async (phone, message) => {
+export const sendWhatsAppTextMessage = async (phone, message) => {
   try {
     const formattedPhone = formatPhoneNumber(phone);
     console.log(`Sending simple text message to ${formattedPhone} (original: ${phone})`);

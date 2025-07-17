@@ -134,6 +134,30 @@ export const notifyContactAdded = async (userId, contact, io) => {
   }, io);
 };
 
+export const notifyIncomingResponse = async (userId, response, contact, campaign, io) => {
+  const title = response.responseType === 'button' 
+    ? 'Button Response Received'
+    : 'Message Response Received';
+    
+  const description = campaign 
+    ? `${contact.name} responded to campaign "${campaign.name}": "${response.responseContent}"`
+    : `${contact.name} sent a message: "${response.responseContent}"`;
+
+  return createNotification({
+    userId,
+    type: 'message',
+    title,
+    description,
+    priority: 'medium',
+    metadata: {
+      contactId: contact._id,
+      campaignId: campaign?._id,
+      responseId: response._id,
+      actionUrl: `/responses/${response._id}`
+    }
+  }, io);
+};
+
 export const notifySystemWarning = async (userId, title, description, metadata = {}, io) => {
   return createNotification({
     userId,
