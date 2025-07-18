@@ -131,7 +131,7 @@ export const initializeOAuthStrategies = async () => {
             githubId: profile.id,
             email: email || `${profile.username}@github.local`,
             firstName: names[0] || profile.username,
-            lastName: names.slice(1).join(' ') || '',
+            lastName: (names.slice(1).join(' ') && names.slice(1).join(' ').trim() !== '') ? names.slice(1).join(' ') : 'GitHub',
             avatar: profile.photos[0]?.value,
             isEmailVerified: !!email
           });

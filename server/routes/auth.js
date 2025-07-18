@@ -185,6 +185,10 @@ router.get('/github',
 router.get('/github/callback',
   passport.authenticate('github', { session: false }),
   (req, res) => {
+    console.log('GitHub user:', req.user);
+    if (!req.user) {
+      return res.redirect(`${process.env.CLIENT_URL}/auth/callback?error=No user found`);
+    }
     const token = generateToken(req.user._id);
     // Redirect to frontend with token
     res.redirect(`${process.env.CLIENT_URL}/auth/callback?token=${token}`);

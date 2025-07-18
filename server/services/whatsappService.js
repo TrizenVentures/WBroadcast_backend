@@ -3,14 +3,13 @@ import Contact from '../models/Contact.js';
 import Message from '../models/Message.js';
 import Campaign from '../models/Campaign.js';
 import Response from '../models/Response.js';
-import { 
-  notifyBroadcastCompleted, 
-  notifyBroadcastFailed, 
+import {
+  notifyBroadcastCompleted,
+  notifyBroadcastFailed,
   notifyBroadcastStarted,
   notifyMessageFailed,
   notifyIncomingResponse
 } from './notificationService.js';
-import axios from 'axios';
 
 const WHATSAPP_API_URL = 'https://graph.facebook.com/v23.0';
 const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -64,7 +63,7 @@ export const sendCampaignMessages = async (campaign, io) => {
     await campaign.save();
 
     // Notify that broadcast has started
-    await notifyBroadcastStarted('system', campaign, io);
+    await notifyBroadcastStarted('6879de1a31ae68ad5651a7f6', campaign, io);
 
     // Emit status update
     io.emit('campaign-status-update', {
@@ -233,7 +232,7 @@ export const sendCampaignMessages = async (campaign, io) => {
         await campaign.save();
 
         // Notify about message failure
-        await notifyMessageFailed('system', message, contact, campaign, err.response?.data?.error?.message || err.message, io);
+        await notifyMessageFailed('6879de1a31ae68ad5651a7f6', message, contact, campaign, err.response?.data?.error?.message || err.message, io);
 
         // Emit status update for failed message
         if (io) {
@@ -255,7 +254,7 @@ export const sendCampaignMessages = async (campaign, io) => {
     await campaign.save();
 
     // Notify that broadcast has completed
-    await notifyBroadcastCompleted('system', campaign, io);
+    await notifyBroadcastCompleted('6879de1a31ae68ad5651a7f6', campaign, io);
 
     // Emit completion status
     if (io) {
@@ -280,7 +279,7 @@ export const sendCampaignMessages = async (campaign, io) => {
     await campaign.save();
 
     // Notify about broadcast failure
-    await notifyBroadcastFailed('system', campaign, error.message, io);
+    await notifyBroadcastFailed('6879de1a31ae68ad5651a7f6', campaign, error.message, io);
 
     if (io) {
       io.emit('campaign-status-update', {
@@ -337,9 +336,9 @@ export const handleWhatsAppWebhook = async (webhookData) => {
 const handleIncomingMessage = async (messageData) => {
   try {
     console.log('Processing incoming message:', JSON.stringify(messageData, null, 2));
-    
+
     const { id: whatsappMessageId, from, type, timestamp } = messageData;
-    
+
     // Find or create contact
     let contact = await Contact.findOne({ phone: from });
     if (!contact) {
@@ -352,25 +351,25 @@ const handleIncomingMessage = async (messageData) => {
       await contact.save();
       console.log(`Created new contact for ${from}`);
     }
-    
+
     let responseContent = '';
     let responseType = type;
     let buttonPayload = null;
     let buttonText = null;
-    
+
     // Extract response content based on message type
     switch (type) {
       case 'text':
         responseContent = messageData.text?.body || '';
         break;
-        
+
       case 'button':
         responseContent = messageData.button?.text || '';
         buttonPayload = messageData.button?.payload || '';
         buttonText = messageData.button?.text || '';
         responseType = 'button';
         break;
-        
+
       case 'interactive':
         if (messageData.interactive?.type === 'button_reply') {
           responseContent = messageData.interactive.button_reply.title || '';
@@ -383,7 +382,7 @@ const handleIncomingMessage = async (messageData) => {
           responseType = 'interactive';
         }
         break;
-        
+
       case 'image':
       case 'video':
       case 'audio':
@@ -391,15 +390,15 @@ const handleIncomingMessage = async (messageData) => {
         responseContent = messageData[type]?.caption || `[${type.toUpperCase()}]`;
         responseType = 'media';
         break;
-        
+
       default:
         responseContent = `[${type.toUpperCase()} MESSAGE]`;
         console.log(`Unhandled message type: ${type}`);
     }
-    
+
     // Try to find the original campaign/message this is responding to
     const originalContext = await findOriginalContext(contact._id);
-    
+
     // Create response record
     const response = new Response({
       whatsappMessageId,
@@ -413,18 +412,18 @@ const handleIncomingMessage = async (messageData) => {
       buttonText,
       rawWebhookData: messageData
     });
-    
+
     await response.save();
     console.log(`✅ Response saved: ${response._id}`);
-    
+
     // Trigger n8n workflow for automated response
     await triggerN8nResponseWorkflow(response, contact, originalContext);
-    
+
     // Create notification for new response
-    await notifyIncomingResponse('system', response, contact, originalContext?.campaign);
-    
+    await notifyIncomingResponse('6879de1a31ae68ad5651a7f6', response, contact, originalContext?.campaign);
+
     return response;
-    
+
   } catch (error) {
     console.error('Error handling incoming message:', error);
     throw error;
@@ -439,9 +438,9 @@ const findOriginalContext = async (contactId) => {
       contactId,
       status: { $in: ['sent', 'delivered', 'read'] }
     })
-    .sort({ sentAt: -1 })
-    .populate('campaignId');
-    
+      .sort({ sentAt: -1 })
+      .populate('campaignId');
+
     if (recentMessage) {
       return {
         messageId: recentMessage._id,
@@ -449,7 +448,7 @@ const findOriginalContext = async (contactId) => {
         campaign: recentMessage.campaignId
       };
     }
-    
+
     return null;
   } catch (error) {
     console.error('Error finding original context:', error);
@@ -461,12 +460,12 @@ const findOriginalContext = async (contactId) => {
 const triggerN8nResponseWorkflow = async (response, contact, originalContext) => {
   try {
     const n8nWebhookUrl = process.env.N8N_RESPONSE_WEBHOOK_URL;
-    
+
     if (!n8nWebhookUrl) {
       console.log('N8N_RESPONSE_WEBHOOK_URL not configured, skipping n8n trigger');
       return;
     }
-    
+
     // Prepare payload for n8n
     const n8nPayload = {
       // Response details
@@ -475,7 +474,7 @@ const triggerN8nResponseWorkflow = async (response, contact, originalContext) =>
       responseContent: response.responseContent,
       buttonPayload: response.buttonPayload,
       buttonText: response.buttonText,
-      
+
       // Contact details
       contact: {
         id: contact._id,
@@ -485,26 +484,26 @@ const triggerN8nResponseWorkflow = async (response, contact, originalContext) =>
         tags: contact.tags,
         metadata: Object.fromEntries(contact.metadata || new Map())
       },
-      
+
       // Original context
       originalContext: originalContext ? {
         campaignId: originalContext.campaignId,
         campaignName: originalContext.campaign?.name,
         messageId: originalContext.messageId
       } : null,
-      
+
       // Timestamp
       timestamp: new Date().toISOString(),
-      
+
       // WhatsApp details
       whatsapp: {
         messageId: response.whatsappMessageId,
         fromPhone: response.fromPhone
       }
     };
-    
+
     console.log('Triggering n8n workflow with payload:', JSON.stringify(n8nPayload, null, 2));
-    
+
     // Send to n8n webhook
     const n8nResponse = await axios.post(n8nWebhookUrl, n8nPayload, {
       headers: {
@@ -512,25 +511,25 @@ const triggerN8nResponseWorkflow = async (response, contact, originalContext) =>
       },
       timeout: 10000 // 10 second timeout
     });
-    
+
     console.log('✅ n8n workflow triggered successfully:', n8nResponse.status);
-    
+
     // Update response record
     response.n8nWorkflowTriggered = true;
     response.processedAt = new Date();
     await response.save();
-    
+
     return n8nResponse.data;
-    
+
   } catch (error) {
     console.error('❌ Error triggering n8n workflow:', error.message);
-    
+
     // Log the error but don't throw - we don't want to break the webhook processing
     if (error.response) {
       console.error('n8n Response Status:', error.response.status);
       console.error('n8n Response Data:', error.response.data);
     }
-    
+
     return null;
   }
 };
