@@ -1,6 +1,10 @@
 import mongoose from 'mongoose';
 
 const messageSchema = new mongoose.Schema({
+  body: {
+    type: String,
+    required: false // Main message body for context/AI
+  },
   campaignId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Campaign',

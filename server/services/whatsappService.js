@@ -40,6 +40,14 @@ export const sendCampaignMessages = async (campaign, io) => {
       throw new Error(`Template ${campaign.templateName} not found or not approved`);
     }
     console.log(`Template details for ${campaign.templateName}:`, JSON.stringify(template, null, 2));
+    console.log('DEBUG: campaign.templateComponents before auto-populate:', campaign.templateComponents);
+    // Auto-populate campaign.templateComponents if empty
+    if (!campaign.templateComponents || campaign.templateComponents.length === 0) {
+      campaign.templateComponents = template.components ? JSON.parse(JSON.stringify(template.components)) : [];
+      await campaign.save();
+      console.log('Auto-populated campaign.templateComponents from template:', campaign.templateComponents);
+    }
+    console.log('DEBUG: campaign.templateComponents after auto-populate:', campaign.templateComponents);
 
     // Get contacts
     const contacts = await Contact.find({
@@ -190,10 +198,13 @@ export const sendCampaignMessages = async (campaign, io) => {
           campaignId: campaign._id,
           contactId: contact._id,
           content: JSON.stringify(templatePayload),
+          body: (template?.components?.find(c => c.type === 'BODY')?.text || ''),
           status: 'sent',
           whatsappMessageId: response.data.messages?.[0]?.id || null,
           sentAt: new Date()
         });
+        console.log(template);
+        console.log('✅ Message record created:', JSON.stringify(message, null, 2));
         await message.save();
 
         // Update campaign progress
@@ -339,17 +350,20 @@ const handleIncomingMessage = async (messageData) => {
 
     const { id: whatsappMessageId, from, type, timestamp } = messageData;
 
-    // Find or create contact
-    let contact = await Contact.findOne({ phone: from });
+    // Format phone number for consistency
+    const formattedPhone = formatPhoneNumber(from);
+    // Check if contact exists by phone number
+    let contact = await Contact.findOne({ phone: formattedPhone });
+    console.log('Contact search result for', formattedPhone, ':', contact);
     if (!contact) {
-      // Create new contact from incoming message
+      // Create new contact only if not found
       contact = new Contact({
-        name: `Contact ${from}`,
-        phone: from,
+        name: `Contact ${formattedPhone}`,
+        phone: formattedPhone,
         status: 'active'
       });
       await contact.save();
-      console.log(`Created new contact for ${from}`);
+      console.log(`Created new contact for ${formattedPhone}`);
     }
 
     let responseContent = '';
@@ -466,6 +480,15 @@ const triggerN8nResponseWorkflow = async (response, contact, originalContext) =>
       return;
     }
 
+    // Find last sent message to this contact for context
+    let lastSentMessage = null;
+    try {
+      lastSentMessage = await Message.findOne({ contactId: contact._id, status: { $in: ['sent', 'delivered', 'read'] } })
+        .sort({ sentAt: -1 });
+    } catch (err) {
+      console.error('Error fetching last sent message for context:', err);
+    }
+
     // Prepare payload for n8n
     const n8nPayload = {
       // Response details
@@ -484,6 +507,7 @@ const triggerN8nResponseWorkflow = async (response, contact, originalContext) =>
         tags: contact.tags,
         metadata: Object.fromEntries(contact.metadata || new Map())
       },
+
 
       // Original context
       originalContext: originalContext ? {
