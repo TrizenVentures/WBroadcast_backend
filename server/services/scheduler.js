@@ -8,23 +8,35 @@ let redisClient;
 
 export const initializeScheduler = async (io) => {
   try {
-    // Initialize Redis client
+    // Build Redis URL for debug (mask password)
+    const redisUrl = `redis://:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`;
+    const maskedRedisUrl = redisUrl.replace(`:${process.env.REDIS_PASSWORD}@`, ':*****@');
+    console.log('[DEBUG] Redis URL for node-redis:', maskedRedisUrl);
+
+    // Initialize Redis client with TLS/SSL for Redis Cloud
     redisClient = Redis.createClient({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: process.env.REDIS_PORT || 6379,
-      password: process.env.REDIS_PASSWORD
+      url: redisUrl
     });
 
     await redisClient.connect();
-    console.log('Connected to Redis');
+    console.log('Connected to Redis (TLS/SSL enabled)');
 
-    // Initialize Bull queue
+    // Debug Bull queue Redis URL
+    console.log('[DEBUG] Redis URL for Bull queue:', maskedRedisUrl);
+
+    // Initialize Bull queue with Redis Cloud using host/port/password for ioredis compatibility
     campaignQueue = new Bull('campaign queue', {
       redis: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: process.env.REDIS_PORT || 6379,
-        password: process.env.REDIS_PASSWORD
+        host: process.env.REDIS_HOST,
+        port: Number(process.env.REDIS_PORT),
+        password: process.env.REDIS_PASSWORD,
+        db: 0
       }
+    });
+
+    // Add error logging for Bull queue
+    campaignQueue.on('error', (err) => {
+      console.error('[Bull Queue Error]', err);
     });
 
     // Process campaign jobs
