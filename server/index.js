@@ -25,9 +25,9 @@ const server = createServer(app);
 // Define allowed origins
 const allowedOrigins = [
   'https://wbc.trizenventures.com',
-  'http://localhost:8080',
-  'http://localhost:3000',
-  'http://localhost:5173'  // Vite's default port
+  // 'http://localhost:8080',
+  // 'http://localhost:3000',
+  // 'http://localhost:5173'  // Vite's default port
 ];
 
 // Configure Socket.IO with CORS
