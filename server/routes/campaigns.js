@@ -1,7 +1,6 @@
 import express from 'express';
 import Campaign from '../models/Campaign.js';
 import Contact from '../models/Contact.js';
-import Template from '../models/Template.js';
 import Message from '../models/Message.js';
 import { scheduleCampaign, cancelCampaign, rescheduleCampaign } from '../services/scheduler.js';
 
@@ -11,7 +10,6 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   try {
     const campaigns = await Campaign.find()
-      .populate('templateId', 'name body')
       .populate('contacts', 'name phone')
       .sort({ createdAt: -1 });
 
@@ -25,7 +23,6 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const campaign = await Campaign.findById(req.params.id)
-      .populate('templateId')
       .populate('contacts');
 
     if (!campaign) {
@@ -43,7 +40,9 @@ router.post('/', async (req, res) => {
   try {
     const {
       name,
-      templateId,
+      templateName,
+      templateLanguage,
+      templateComponents,
       contactIds,
       variables,
       scheduledAt,
@@ -51,17 +50,11 @@ router.post('/', async (req, res) => {
       rateLimitPerMinute
     } = req.body;
 
-    // Validate template exists
-    const template = await Template.findById(templateId);
-    if (!template) {
-      return res.status(400).json({ error: 'Template not found' });
-    }
-
     // Validate contacts exist
     const contacts = await Contact.find({
       _id: { $in: contactIds },
       status: 'active',
-      optedOut: false
+      optedOut: false,
     });
 
     if (contacts.length === 0) {
@@ -71,7 +64,9 @@ router.post('/', async (req, res) => {
     // Create campaign
     const campaign = new Campaign({
       name,
-      templateId,
+      templateName,
+      templateLanguage,
+      templateComponents: templateComponents || [],
       contacts: contacts.map(c => c._id),
       variables: new Map(Object.entries(variables || {})),
       scheduledAt: new Date(scheduledAt),
@@ -85,6 +80,7 @@ router.post('/', async (req, res) => {
         read: 0,
         failed: 0
       }
+      // Do NOT set jobId here; let the scheduler assign it uniquely
     });
 
     await campaign.save();
@@ -100,7 +96,6 @@ router.post('/', async (req, res) => {
     }
 
     const populatedCampaign = await Campaign.findById(campaign._id)
-      .populate('templateId', 'name body')
       .populate('contacts', 'name phone');
 
     res.status(201).json(populatedCampaign);
@@ -137,7 +132,6 @@ router.put('/:id', async (req, res) => {
     await campaign.save();
 
     const updatedCampaign = await Campaign.findById(id)
-      .populate('templateId', 'name body')
       .populate('contacts', 'name phone');
 
     res.json(updatedCampaign);
@@ -154,7 +148,6 @@ router.post('/:id/cancel', async (req, res) => {
     await cancelCampaign(id);
 
     const campaign = await Campaign.findById(id)
-      .populate('templateId', 'name body')
       .populate('contacts', 'name phone');
 
     res.json(campaign);
