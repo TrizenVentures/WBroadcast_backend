@@ -44,24 +44,23 @@ export const initializeOAuthStrategies = async () => {
   console.log('Environment check - GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? 'SET' : 'UNDEFINED');
 
   // Google OAuth Strategy
+  // Use a full https callback URL from env for production compliance
   if (isValidOAuthConfig(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET)) {
     try {
       const { Strategy: GoogleStrategy } = await import('passport-google-oauth20');
       passport.use(new GoogleStrategy({
         clientID: process.env.GOOGLE_CLIENT_ID,
         clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-        callbackURL: "/api/auth/google/callback"
+        // Use GOOGLE_CALLBACK_URL env variable, fallback to relative path for dev
+        callbackURL: process.env.GOOGLE_CALLBACK_URL || "/api/auth/google/callback"
       }, async (accessToken, refreshToken, profile, done) => {
         try {
           let user = await User.findOne({ googleId: profile.id });
-
           if (user) {
             await user.updateLastLogin();
             return done(null, user);
           }
-
           user = await User.findOne({ email: profile.emails[0].value });
-
           if (user) {
             user.googleId = profile.id;
             user.avatar = profile.photos[0]?.value;
@@ -70,7 +69,6 @@ export const initializeOAuthStrategies = async () => {
             await user.updateLastLogin();
             return done(null, user);
           }
-
           user = new User({
             googleId: profile.id,
             email: profile.emails[0].value,
@@ -79,7 +77,6 @@ export const initializeOAuthStrategies = async () => {
             avatar: profile.photos[0]?.value,
             isEmailVerified: true
           });
-
           await user.save();
           await user.updateLastLogin();
           done(null, user);
@@ -94,6 +91,8 @@ export const initializeOAuthStrategies = async () => {
   } else {
     console.log('Google OAuth credentials not configured - strategy disabled');
   }
+  // NOTE: Set GOOGLE_CALLBACK_URL in your .env to the full https callback, e.g.
+  // GOOGLE_CALLBACK_URL=https://wboardcast-backend.llp.trizenventures.com/api/auth/google/callback
 
   // GitHub OAuth Strategy
   if (isValidOAuthConfig(process.env.GITHUB_CLIENT_ID, process.env.GITHUB_CLIENT_SECRET)) {
