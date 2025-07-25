@@ -95,26 +95,25 @@ export const initializeOAuthStrategies = async () => {
   // GOOGLE_CALLBACK_URL=https://wboardcast-backend.llp.trizenventures.com/api/auth/google/callback
 
   // GitHub OAuth Strategy
+  // Use a full https callback URL from env for production compliance
   if (isValidOAuthConfig(process.env.GITHUB_CLIENT_ID, process.env.GITHUB_CLIENT_SECRET)) {
     try {
       const { Strategy: GitHubStrategy } = await import('passport-github2');
       passport.use(new GitHubStrategy({
         clientID: process.env.GITHUB_CLIENT_ID,
         clientSecret: process.env.GITHUB_CLIENT_SECRET,
-        callbackURL: "/api/auth/github/callback"
+        // Use GITHUB_CALLBACK_URL env variable, fallback to relative path for dev
+        callbackURL: process.env.GITHUB_CALLBACK_URL || "/api/auth/github/callback"
       }, async (accessToken, refreshToken, profile, done) => {
         try {
           let user = await User.findOne({ githubId: profile.id });
-
           if (user) {
             await user.updateLastLogin();
             return done(null, user);
           }
-
           const email = profile.emails?.[0]?.value;
           if (email) {
             user = await User.findOne({ email });
-
             if (user) {
               user.githubId = profile.id;
               user.avatar = profile.photos[0]?.value;
@@ -124,7 +123,6 @@ export const initializeOAuthStrategies = async () => {
               return done(null, user);
             }
           }
-
           const names = profile.displayName?.split(' ') || ['', ''];
           user = new User({
             githubId: profile.id,
@@ -134,7 +132,6 @@ export const initializeOAuthStrategies = async () => {
             avatar: profile.photos[0]?.value,
             isEmailVerified: !!email
           });
-
           await user.save();
           await user.updateLastLogin();
           done(null, user);
@@ -149,6 +146,8 @@ export const initializeOAuthStrategies = async () => {
   } else {
     console.log('GitHub OAuth credentials not configured - strategy disabled');
   }
+  // NOTE: Set GITHUB_CALLBACK_URL in your .env to the full https callback, e.g.
+  // GITHUB_CALLBACK_URL=https://wboardcast-backend.llp.trizenventures.com/api/auth/github/callback
 };
 
 // Session serialization
