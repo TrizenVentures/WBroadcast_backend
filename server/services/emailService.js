@@ -1,8 +1,73 @@
+
+
 import nodemailer from 'nodemailer';
 
+
+// Send verification email with Microsoft Graph API (single implementation, with error handling)
+export const sendVerificationEmailGraph = async (toEmail, firstName, token) => {
+  const {
+    AZURE_TENANT_ID,
+    AZURE_CLIENT_ID,
+    AZURE_CLIENT_SECRET,
+    SENDER_EMAIL
+  } = process.env;
+
+  // Hardcoded for local development
+  const API_URL = 'http://localhost:3001/api';
+
+  if (!AZURE_TENANT_ID || !AZURE_CLIENT_ID || !AZURE_CLIENT_SECRET || !SENDER_EMAIL) {
+    throw new Error('Missing required environment variables for sending verification email.');
+  }
+
+  let Client, ClientSecretCredential;
+  try {
+    Client = (await import('@microsoft/microsoft-graph-client')).Client;
+    ClientSecretCredential = (await import('@azure/identity')).ClientSecretCredential;
+  } catch (err) {
+    throw new Error('Microsoft Graph dependencies not installed. Please install @microsoft/microsoft-graph-client and @azure/identity.');
+  }
+
+  const credential = new ClientSecretCredential(
+    AZURE_TENANT_ID,
+    AZURE_CLIENT_ID,
+    AZURE_CLIENT_SECRET
+  );
+
+  const graphClient = Client.initWithMiddleware({
+    authProvider: {
+      getAccessToken: async () => {
+        const tokenObj = await credential.getToken('https://graph.microsoft.com/.default');
+        return tokenObj.token;
+      }
+    }
+  });
+
+  const verifyUrl = `${API_URL}/auth/verify-email?token=${token}`;
+  const subject = 'Verify your email address';
+  const body = `Hello${firstName ? ' ' + firstName : ''},\n\nPlease verify your email by clicking the link below:\n${verifyUrl}\n\nIf you did not sign up, you can ignore this email.`;
+
+  try {
+    await graphClient.api('/users/' + SENDER_EMAIL + '/sendMail').post({
+      message: {
+        subject,
+        body: {
+          contentType: 'Text',
+          content: body
+        },
+        toRecipients: [
+          { emailAddress: { address: toEmail } }
+        ]
+      }
+    });
+    console.log(`✅ Verification email sent successfully to ${toEmail}`);
+    return { success: true };
+  } catch (err) {
+    console.error('❌ Failed to send verification email:', err);
+    throw new Error('Failed to send verification email. Please try again later.');
+  }
+};
 // Create reusable transporter object using SMTP transport
 const createTransporter = () => {
-  // Support multiple email providers
   const emailConfig = {
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
     port: parseInt(process.env.SMTP_PORT) || 587,
@@ -11,213 +76,84 @@ const createTransporter = () => {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
-    // Additional professional configurations
-    pool: true, // Use connection pooling
+    pool: true,
     maxConnections: 5,
     maxMessages: 100,
-    rateDelta: 1000, // 1 second
-    rateLimit: 5, // 5 emails per second max
+    rateDelta: 1000,
+    rateLimit: 5,
   };
-
-  // Add specific configurations for different providers
   if (process.env.SMTP_HOST?.includes('outlook') || process.env.SMTP_HOST?.includes('hotmail')) {
     emailConfig.requireTLS = true;
     emailConfig.tls = {
       ciphers: 'SSLv3'
     };
   }
-
   return nodemailer.createTransport(emailConfig);
 };
 
-// Professional email templates
-const getEmailTemplate = (type, data) => {
-  const baseStyle = `
-    <style>
-      .container { 
-        max-width: 600px; 
-        margin: 0 auto; 
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        line-height: 1.6;
-        color: #333;
-      }
-      .header { 
-        background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
-        color: white; 
-        padding: 30px 20px; 
-        text-align: center;
-        border-radius: 8px 8px 0 0;
-      }
-      .content { 
-        padding: 40px 30px; 
-        background-color: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-top: none;
-      }
-      .button { 
-        display: inline-block; 
-        padding: 16px 32px; 
-        background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
-        color: white; 
-        text-decoration: none; 
-        border-radius: 8px; 
-        margin: 24px 0;
-        font-weight: 600;
-        box-shadow: 0 4px 12px rgba(22, 163, 74, 0.3);
-      }
-      .button:hover {
-        background: linear-gradient(135deg, #15803d 0%, #166534 100%);
-      }
-      .footer { 
-        padding: 30px 20px; 
-        text-align: center; 
-        color: #6b7280; 
-        font-size: 14px;
-        background-color: #f9fafb;
-        border-radius: 0 0 8px 8px;
-      }
-      .security-notice {
-        background-color: #fef3c7;
-        border: 1px solid #f59e0b;
-        border-radius: 6px;
-        padding: 16px;
-        margin: 20px 0;
-        color: #92400e;
-      }
-      .logo {
-        font-size: 24px;
-        font-weight: bold;
-        margin-bottom: 8px;
-      }
-    </style>
-  `;
+// ...existing code...
+// Send password reset email with Microsoft Graph API (single implementation, with error handling)
+export const sendPasswordResetEmail = async (toEmail, resetToken) => {
+  const {
+    AZURE_TENANT_ID,
+    AZURE_CLIENT_ID,
+    AZURE_CLIENT_SECRET,
+    SENDER_EMAIL
+  } = process.env;
 
-  switch (type) {
-    case 'password-reset':
-      return `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Password Reset - WhatsApp Broadcast Platform</title>
-          ${baseStyle}
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <div class="logo">📱 WhatsApp Broadcast</div>
-              <h1 style="margin: 0; font-size: 28px;">Password Reset Request</h1>
-            </div>
-            <div class="content">
-              <p style="font-size: 16px; margin-bottom: 24px;">Hello,</p>
-              
-              <p>We received a request to reset the password for your WhatsApp Broadcast Platform account.</p>
-              
-              <p>Click the button below to create a new password:</p>
-              
-              <div style="text-align: center; margin: 32px 0;">
-                <a href="${data.resetUrl}" class="button">Reset My Password</a>
-              </div>
-              
-              <div class="security-notice">
-                <strong>🔒 Security Information:</strong>
-                <ul style="margin: 8px 0; padding-left: 20px;">
-                  <li>This link will expire in <strong>1 hour</strong></li>
-                  <li>Use this link only once to reset your password</li>
-                  <li>If you didn't request this reset, please ignore this email</li>
-                </ul>
-              </div>
-              
-              <p style="color: #6b7280; font-size: 14px; margin-top: 24px;">
-                If the button doesn't work, copy and paste this link into your browser:<br>
-                <a href="${data.resetUrl}" style="color: #16a34a; word-break: break-all;">${data.resetUrl}</a>
-              </p>
-              
-              <p style="margin-top: 32px;">
-                Best regards,<br>
-                <strong>WhatsApp Broadcast Platform Team</strong>
-              </p>
-            </div>
-            <div class="footer">
-              <p><strong>WhatsApp Broadcast Platform</strong></p>
-              <p>This is an automated security email. Please do not reply to this message.</p>
-              <p style="margin-top: 16px; font-size: 12px;">
-                © ${new Date().getFullYear()} WhatsApp Broadcast Platform. All rights reserved.
-              </p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-    
-    default:
-      return '';
+  // Hardcoded for local development
+  const CLIENT_URL = 'http://localhost:3001';
+
+  if (!AZURE_TENANT_ID || !AZURE_CLIENT_ID || !AZURE_CLIENT_SECRET || !SENDER_EMAIL) {
+    throw new Error('Missing required environment variables for sending password reset email.');
   }
-};
 
-// Send password reset email with professional formatting
-export const sendPasswordResetEmail = async (email, resetToken) => {
+  let Client, ClientSecretCredential;
   try {
-    const transporter = createTransporter();
-    
-    const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
-    
-    const mailOptions = {
-      from: {
-        name: 'WhatsApp Broadcast Platform',
-        address: process.env.SMTP_USER
-      },
-      to: email,
-      subject: '🔐 Password Reset Request - Action Required',
-      html: getEmailTemplate('password-reset', { resetUrl }),
-      // Add text version for better deliverability
-      text: `
-Password Reset Request
+    Client = (await import('@microsoft/microsoft-graph-client')).Client;
+    ClientSecretCredential = (await import('@azure/identity')).ClientSecretCredential;
+  } catch (err) {
+    throw new Error('Microsoft Graph dependencies not installed. Please install @microsoft/microsoft-graph-client and @azure/identity.');
+  }
 
-Hello,
+  const credential = new ClientSecretCredential(
+    AZURE_TENANT_ID,
+    AZURE_CLIENT_ID,
+    AZURE_CLIENT_SECRET
+  );
 
-We received a request to reset the password for your WhatsApp Broadcast Platform account.
-
-Click this link to reset your password: ${resetUrl}
-
-SECURITY INFORMATION:
-- This link will expire in 1 hour
-- Use this link only once to reset your password
-- If you didn't request this reset, please ignore this email
-
-Best regards,
-WhatsApp Broadcast Platform Team
-
-This is an automated security email. Please do not reply to this message.
-      `,
-      // Professional email headers
-      headers: {
-        'X-Mailer': 'WhatsApp Broadcast Platform',
-        'X-Priority': '1', // High priority for security emails
+  const graphClient = Client.initWithMiddleware({
+    authProvider: {
+      getAccessToken: async () => {
+        const tokenObj = await credential.getToken('https://graph.microsoft.com/.default');
+        return tokenObj.token;
       }
-    };
-
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Password reset email sent successfully to ${email}`);
-    console.log('Message ID:', info.messageId);
-    
-    return { 
-      success: true, 
-      messageId: info.messageId,
-      timestamp: new Date().toISOString()
-    };
-  } catch (error) {
-    console.error('❌ Error sending password reset email:', error);
-    
-    // Log specific error details for debugging
-    if (error.code === 'EAUTH') {
-      console.error('Authentication failed. Check SMTP credentials.');
-    } else if (error.code === 'ECONNECTION') {
-      console.error('Connection failed. Check SMTP host and port.');
     }
-    
-    throw new Error(`Failed to send password reset email: ${error.message}`);
+  });
+
+  const resetUrl = `${CLIENT_URL}/reset-password?token=${resetToken}`;
+  const subject = '🔐 Password Reset Request - Action Required';
+  const body = `Hello,\n\nWe received a request to reset the password for your WhatsApp Broadcast Platform account.\n\nClick this link to reset your password: ${resetUrl}\n\nSECURITY INFORMATION:\n- This link will expire in 1 hour\n- Use this link only once to reset your password\n- If you didn't request this reset, please ignore this email\n\nBest regards,\nWhatsApp Broadcast Platform Team\n\nThis is an automated security email. Please do not reply to this message.`;
+
+  try {
+    await graphClient.api('/users/' + SENDER_EMAIL + '/sendMail').post({
+      message: {
+        subject,
+        body: {
+          contentType: 'Text',
+          content: body
+        },
+        toRecipients: [
+          { emailAddress: { address: toEmail } }
+        ]
+      },
+      saveToSentItems: 'false'
+    });
+    console.log(`✅ Password reset email sent successfully to ${toEmail}`);
+    return { success: true };
+  } catch (err) {
+    console.error('❌ Failed to send password reset email:', err);
+    throw new Error('Failed to send password reset email. Please try again later.');
   }
 };
 
@@ -225,19 +161,15 @@ This is an automated security email. Please do not reply to this message.
 export const testEmailConfig = async () => {
   try {
     const transporter = createTransporter();
-    
-    // Verify connection
     await transporter.verify();
-    
     console.log('✅ Email configuration test passed');
-    return { 
-      success: true, 
+    return {
+      success: true,
       message: 'Email configuration is valid and ready to send emails',
       timestamp: new Date().toISOString()
     };
   } catch (error) {
     console.error('❌ Email configuration test failed:', error);
-    
     let errorDetails = 'Unknown error';
     if (error.code === 'EAUTH') {
       errorDetails = 'Authentication failed. Check your email and app password.';
@@ -246,45 +178,11 @@ export const testEmailConfig = async () => {
     } else if (error.code === 'ETIMEDOUT') {
       errorDetails = 'Connection timeout. Check your internet connection and firewall settings.';
     }
-    
-    return { 
-      success: false, 
+    return {
+      success: false,
       error: error.message,
       details: errorDetails,
       timestamp: new Date().toISOString()
     };
-  }
-};
-
-// Send welcome email (bonus feature)
-export const sendWelcomeEmail = async (email, firstName) => {
-  try {
-    const transporter = createTransporter();
-    
-    const mailOptions = {
-      from: {
-        name: 'WhatsApp Broadcast Platform',
-        address: process.env.SMTP_USER
-      },
-      to: email,
-      subject: '🎉 Welcome to WhatsApp Broadcast Platform!',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); color: white; padding: 30px; text-align: center;">
-            <h1>Welcome, ${firstName}! 🎉</h1>
-          </div>
-          <div style="padding: 30px; background: white;">
-            <p>Thank you for joining WhatsApp Broadcast Platform!</p>
-            <p>You can now start creating and managing your WhatsApp broadcast campaigns.</p>
-            <p>If you have any questions, feel free to reach out to our support team.</p>
-          </div>
-        </div>
-      `
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`✅ Welcome email sent to ${email}`);
-  } catch (error) {
-    console.error('❌ Error sending welcome email:', error);
   }
 };
