@@ -12,8 +12,8 @@ export const sendVerificationEmailGraph = async (toEmail, firstName, token) => {
     SENDER_EMAIL
   } = process.env;
 
-  // Hardcoded for local development
-  const API_URL = 'http://localhost:3001/api';
+  // Use API_URL from environment or fallback
+  const API_URL = process.env.API_URL || 'http://localhost:3001/api';
 
   if (!AZURE_TENANT_ID || !AZURE_CLIENT_ID || !AZURE_CLIENT_SECRET || !SENDER_EMAIL) {
     throw new Error('Missing required environment variables for sending verification email.');
@@ -101,8 +101,8 @@ export const sendPasswordResetEmail = async (toEmail, resetToken) => {
     SENDER_EMAIL
   } = process.env;
 
-  // Hardcoded for local development
-  const CLIENT_URL = 'http://localhost:3001';
+  // Use CLIENT_URL from environment or fallback
+  const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:8080';
 
   if (!AZURE_TENANT_ID || !AZURE_CLIENT_ID || !AZURE_CLIENT_SECRET || !SENDER_EMAIL) {
     throw new Error('Missing required environment variables for sending password reset email.');
