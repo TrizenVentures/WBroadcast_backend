@@ -78,7 +78,8 @@ router.post('/register', async (req, res) => {
         user.emailVerificationExpires = undefined;
         await user.save();
         // Redirect to frontend login with verified flag
-        return res.redirect(`${process.env.CLIENT_URL}/login?verified=1`);
+        const clientUrl = process.env.CLIENT_URL || 'http://localhost:8080';
+        return res.redirect(`${clientUrl}/login?verified=1`);
       } catch (error) {
         console.error('Email verification error:', error);
         res.status(500).json({ error: 'Internal server error' });
