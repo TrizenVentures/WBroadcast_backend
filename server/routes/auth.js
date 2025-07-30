@@ -2,7 +2,7 @@ import express from 'express';
 import passport from '../config/passport.js';
 import User from '../models/User.js';
 import { generateToken, authenticate } from '../middleware/auth.js';
-import { sendPasswordResetEmail } from '../services/emailService.js';
+import { sendPasswordResetEmail, sendVerificationEmailGraph } from '../services/emailService.js';
 import crypto from 'crypto';
 
 const router = express.Router();
@@ -33,6 +33,11 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'User already exists with this email' });
     }
 
+
+    // Generate email verification token
+    const emailVerificationToken = crypto.randomBytes(32).toString('hex');
+    const emailVerificationExpires = Date.now() + 60 * 60 * 1000; // 1 hour
+
     // Create new user
     const user = new User({
       email,
@@ -40,33 +45,44 @@ router.post('/register', async (req, res) => {
       firstName,
       lastName,
       company,
-      phone
+      phone,
+      emailVerificationToken,
+      emailVerificationExpires
     });
 
     await user.save();
 
-    // Generate token
-    const token = generateToken(user._id);
+    // Send verification email using Microsoft Graph API
+    await sendVerificationEmailGraph(user.email, user.firstName, emailVerificationToken);
 
-    // Return user data (without password)
-    const userData = {
-      _id: user._id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      fullName: user.fullName,
-      avatar: user.avatar,
-      role: user.role,
-      company: user.company,
-      phone: user.phone,
-      isEmailVerified: user.isEmailVerified,
-      createdAt: user.createdAt
-    };
-
+    // Only send message, do not log in user
     res.status(201).json({
-      message: 'User registered successfully',
-      token,
-      user: userData
+      message: 'User registered successfully. Please check your email to verify your account.'
+    });
+    // Email verification route (must be after router is initialized)
+    router.get('/verify-email', async (req, res) => {
+      try {
+        const { token } = req.query;
+        if (!token) {
+          return res.status(400).json({ error: 'Verification token is required' });
+        }
+        const user = await User.findOne({
+          emailVerificationToken: token,
+          emailVerificationExpires: { $gt: Date.now() }
+        });
+        if (!user) {
+          return res.status(400).json({ error: 'Invalid or expired verification token' });
+        }
+        user.isEmailVerified = true;
+        user.emailVerificationToken = undefined;
+        user.emailVerificationExpires = undefined;
+        await user.save();
+        // Redirect to frontend login with verified flag
+        return res.redirect(`${process.env.CLIENT_URL}/login?verified=1`);
+      } catch (error) {
+        console.error('Email verification error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+      }
     });
   } catch (error) {
     console.error('Registration error:', error);
@@ -94,19 +110,16 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Account is deactivated' });
     }
 
-    // Verify password
-    const isPasswordValid = await user.comparePassword(password);
-    if (!isPasswordValid) {
+    // Check password
+    const isMatch = await user.comparePassword(password);
+    if (!isMatch) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
-
-    // Update last login
-    await user.updateLastLogin();
 
     // Generate token
     const token = generateToken(user._id);
 
-    // Return user data (without password)
+    // Prepare user data
     const userData = {
       _id: user._id,
       email: user.email,
@@ -118,7 +131,6 @@ router.post('/login', async (req, res) => {
       company: user.company,
       phone: user.phone,
       isEmailVerified: user.isEmailVerified,
-      lastLoginAt: user.lastLoginAt,
       createdAt: user.createdAt
     };
 
@@ -127,6 +139,9 @@ router.post('/login', async (req, res) => {
       token,
       user: userData
     });
+
+    // End of try block
+
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Internal server error' });
