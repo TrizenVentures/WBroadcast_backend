@@ -18,6 +18,16 @@ export const initializeScheduler = async (io) => {
       url: redisUrl
     });
 
+
+    // Add error handling for Redis client
+    redisClient.on('error', (err) => {
+      console.error('[Redis Client Error]', err);
+      // Optionally, you can implement reconnection logic here
+    });
+    redisClient.on('end', () => {
+      console.warn('[Redis Client] Connection closed');
+    });
+
     await redisClient.connect();
     console.log('Connected to Redis (TLS/SSL enabled)');
 
